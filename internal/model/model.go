@@ -104,17 +104,17 @@ func (c ClusterSnapshot) OnlineCount() int {
 // whole cluster were one machine.
 func (c ClusterSnapshot) Aggregate() HostStats {
 	var agg HostStats
-	online := 0
-	maxCores := 0
+	var online, totalCores, totalBusy float64
 	for _, node := range c.Nodes {
 		if !node.Online {
 			continue
 		}
 		online++
 		agg.Add(node.Host)
-		if len(node.Host.PerCoreCPU) > maxCores {
-			maxCores = len(node.Host.PerCoreCPU)
-		}
+
+		cores := float64(len(node.Host.PerCoreCPU))
+		totalCores += cores
+		totalBusy += node.Host.CPUPercent * cores / 100
 	}
 	if online == 0 {
 		return agg
@@ -123,25 +123,13 @@ func (c ClusterSnapshot) Aggregate() HostStats {
 	// CPUPercent is the utilization-weighted-by-core-count average, i.e.
 	// total busy "core-percent" divided by total cores, matching how a
 	// single machine's overall CPU% behaves.
-	var totalCores, totalBusy float64
-	for _, node := range c.Nodes {
-		if !node.Online {
-			continue
-		}
-		cores := float64(len(node.Host.PerCoreCPU))
-		if cores == 0 {
-			continue
-		}
-		totalCores += cores
-		totalBusy += node.Host.CPUPercent * cores / 100
-	}
 	if totalCores > 0 {
 		agg.CPUPercent = totalBusy / totalCores * 100
 	}
 
-	agg.Load1 /= float64(online)
-	agg.Load5 /= float64(online)
-	agg.Load15 /= float64(online)
+	agg.Load1 /= online
+	agg.Load5 /= online
+	agg.Load15 /= online
 
 	return agg
 }
@@ -183,15 +171,6 @@ func (c ClusterSnapshot) ServiceAggregates() []ServiceAggregate {
 	out := make([]ServiceAggregate, 0, len(order))
 	for _, name := range order {
 		out = append(out, *byName[name])
-	}
-	return out
-}
-
-// AllContainers flattens containers from every node into one slice.
-func (c ClusterSnapshot) AllContainers() []Container {
-	var out []Container
-	for _, node := range c.Nodes {
-		out = append(out, node.Containers...)
 	}
 	return out
 }

@@ -25,15 +25,23 @@ var (
 	offlineText = lipgloss.NewStyle().Foreground(colorGray).Italic(true)
 
 	footerStyle = lipgloss.NewStyle().Foreground(colorGray)
+
+	// Gauge fill styles, precomputed once rather than per bar() call: a bar
+	// is drawn for every core/mem/disk/swap gauge on every render, which
+	// happens on every incoming snapshot.
+	gaugeFillGreenStyle  = lipgloss.NewStyle().Foreground(colorGreen)
+	gaugeFillYellowStyle = lipgloss.NewStyle().Foreground(colorYellow)
+	gaugeFillRedStyle    = lipgloss.NewStyle().Foreground(colorRed)
+	gaugeEmptyStyle      = lipgloss.NewStyle().Foreground(colorGray)
 )
 
-func gaugeColor(pct float64) lipgloss.Color {
+func gaugeFillStyle(pct float64) lipgloss.Style {
 	switch {
 	case pct >= 90:
-		return colorRed
+		return gaugeFillRedStyle
 	case pct >= 70:
-		return colorYellow
+		return gaugeFillYellowStyle
 	default:
-		return colorGreen
+		return gaugeFillGreenStyle
 	}
 }

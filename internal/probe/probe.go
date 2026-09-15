@@ -57,35 +57,26 @@ type sections struct {
 
 func splitSections(output string) sections {
 	var s sections
+	markers := map[string]*[]string{
+		"@@CPU":         &s.cpu,
+		"@@MEM":         &s.mem,
+		"@@LOAD":        &s.load,
+		"@@UPTIME":      &s.uptime,
+		"@@NET":         &s.net,
+		"@@DISK":        &s.disk,
+		"@@DOCKERSTATS": &s.dockerStats,
+		"@@DOCKERPS":    &s.dockerPS,
+	}
+
 	var cur *[]string
 	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	// Script output is a few KB; let the buffer grow lazily instead of
+	// pre-allocating 1MB on every poll of every node.
+	scanner.Buffer(nil, 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
-		switch line {
-		case "@@CPU":
-			cur = &s.cpu
-			continue
-		case "@@MEM":
-			cur = &s.mem
-			continue
-		case "@@LOAD":
-			cur = &s.load
-			continue
-		case "@@UPTIME":
-			cur = &s.uptime
-			continue
-		case "@@NET":
-			cur = &s.net
-			continue
-		case "@@DISK":
-			cur = &s.disk
-			continue
-		case "@@DOCKERSTATS":
-			cur = &s.dockerStats
-			continue
-		case "@@DOCKERPS":
-			cur = &s.dockerPS
+		if p, ok := markers[line]; ok {
+			cur = p
 			continue
 		}
 		if cur != nil {
@@ -426,10 +417,10 @@ func Parse(output string, prev *Sample) (model.HostStats, []model.Container, Sam
 		Uptime:      uptime,
 	}
 
+	host.PerCoreCPU = make([]float64, len(cpuCores))
 	if prev != nil {
 		elapsed := now.Sub(prev.Timestamp).Seconds()
 		host.CPUPercent = cpuPercentFromDelta(prev.CPUAll, cpuAll)
-		host.PerCoreCPU = make([]float64, len(cpuCores))
 		for i, c := range cpuCores {
 			if i < len(prev.CPUCores) {
 				host.PerCoreCPU[i] = cpuPercentFromDelta(prev.CPUCores[i], c)
@@ -443,8 +434,6 @@ func Parse(output string, prev *Sample) (model.HostStats, []model.Container, Sam
 				host.NetTxBytesPerSec = float64(cur.NetTxTot-prev.NetTxTot) / elapsed
 			}
 		}
-	} else {
-		host.PerCoreCPU = make([]float64, len(cpuCores))
 	}
 
 	return host, containers, cur

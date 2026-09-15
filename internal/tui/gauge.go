@@ -3,8 +3,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-
-	"github.com/charmbracelet/lipgloss"
 )
 
 // bar renders a single-line "label [#####.....] 42.3%  detail" gauge.
@@ -23,9 +21,8 @@ func bar(label string, pct float64, width int, detail string) string {
 	if filled > width {
 		filled = width
 	}
-	fillStyle := lipgloss.NewStyle().Foreground(gaugeColor(pct))
-	filledStr := fillStyle.Render(strings.Repeat("█", filled))
-	emptyStr := lipgloss.NewStyle().Foreground(colorGray).Render(strings.Repeat("░", width-filled))
+	filledStr := gaugeFillStyle(pct).Render(strings.Repeat("█", filled))
+	emptyStr := gaugeEmptyStyle.Render(strings.Repeat("░", width-filled))
 
 	pctStr := fmt.Sprintf("%5.1f%%", pct)
 	line := fmt.Sprintf("%-8s [%s%s] %s", label, filledStr, emptyStr, pctStr)
