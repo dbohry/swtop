@@ -1,5 +1,9 @@
 # swtop
 
+[![Release](https://github.com/dbohry/swtop/actions/workflows/release.yml/badge.svg)](https://github.com/dbohry/swtop/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/dbohry/swtop)](https://github.com/dbohry/swtop/releases/latest)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/dbohry/swtop)](go.mod)
+
 A `btop`/`htop`-style terminal UI for a Docker Swarm cluster. Connects to every node over SSH and shows a consolidated cluster view plus a per-node view (CPU, memory, disk, network, and containers).
 
 ## Requirements
