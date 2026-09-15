@@ -1,6 +1,5 @@
 # swtop
 
-[![Release](https://github.com/dbohry/swtop/actions/workflows/release.yml/badge.svg)](https://github.com/dbohry/swtop/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/dbohry/swtop)](https://github.com/dbohry/swtop/releases/latest)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/dbohry/swtop)](go.mod)
 
