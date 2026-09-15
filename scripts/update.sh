@@ -16,8 +16,18 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
   auth_header=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-version=$("$SCRIPT_DIR/latest-version.sh")
+release_json=$(curl -fsSL "${auth_header[@]+"${auth_header[@]}"}" -H "Accept: application/vnd.github+json" "${API}/releases/latest")
+
+if command -v jq >/dev/null 2>&1; then
+  version=$(jq -r '.tag_name' <<<"$release_json")
+else
+  version=$(grep -m1 '"tag_name"' <<<"$release_json" | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+fi
+
+if [ -z "${version:-}" ] || [ "$version" = "null" ]; then
+  echo "Error: could not determine the latest release version" >&2
+  exit 1
+fi
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 arch=$(uname -m)
@@ -32,8 +42,6 @@ case "$os" in
 esac
 
 asset_name="swtop-${os}-${arch}.tar.gz"
-
-release_json=$(curl -fsSL "${auth_header[@]+"${auth_header[@]}"}" "${API}/releases/tags/${version}")
 
 if command -v jq >/dev/null 2>&1; then
   asset_url=$(jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .url' <<<"$release_json")
