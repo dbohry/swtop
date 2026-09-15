@@ -235,13 +235,17 @@ func (m Model) renderClusterBody() string {
 			status = "down"
 			style = offlineText
 		}
+		containerCount := "-"
+		if n.Docker {
+			containerCount = strconv.Itoa(len(n.Containers))
+		}
 		row := renderRow(cols, []string{
 			n.Name,
 			roleOr(n.Role),
 			status,
 			fmt.Sprintf("%.1f", n.Host.CPUPercent),
 			fmt.Sprintf("%.1f", percentOf(n.Host.MemUsedKB, n.Host.MemTotalKB)),
-			strconv.Itoa(len(n.Containers)),
+			containerCount,
 		})
 		nodeLines = append(nodeLines, style.Render(row))
 	}
@@ -332,6 +336,10 @@ func (m Model) renderNodeHeader(n model.NodeSnapshot) string {
 }
 
 func (m Model) renderNodeBody(n model.NodeSnapshot) string {
+	if !n.Docker {
+		return m.renderProcessBody(n)
+	}
+
 	width := m.effectiveWidth()
 	inner := width - 4
 	if inner < 1 {
@@ -373,6 +381,42 @@ func (m Model) renderNodeBody(n model.NodeSnapshot) string {
 	}
 
 	return renderBox(fmt.Sprintf("Containers (%d)", len(n.Containers)), colorCyan, width, lines)
+}
+
+func (m Model) renderProcessBody(n model.NodeSnapshot) string {
+	width := m.effectiveWidth()
+	inner := width - 4
+	if inner < 1 {
+		inner = 1
+	}
+
+	processes := make([]model.Process, len(n.Processes))
+	copy(processes, n.Processes)
+	sort.Slice(processes, func(i, j int) bool {
+		if m.sortByMem {
+			return processes[i].MemPercent > processes[j].MemPercent
+		}
+		return processes[i].CPUPercent > processes[j].CPUPercent
+	})
+
+	cols := fitColumns([]column{
+		{title: "PID", width: 8, right: true},
+		{title: "COMMAND", width: 24, flexWeight: 1},
+		{title: "CPU%", width: 6, right: true},
+		{title: "MEM%", width: 6, right: true},
+	}, inner)
+
+	lines := []string{renderHeader(cols)}
+	for _, p := range processes {
+		lines = append(lines, renderRow(cols, []string{
+			strconv.Itoa(p.PID),
+			p.Command,
+			fmt.Sprintf("%.1f", p.CPUPercent),
+			fmt.Sprintf("%.1f", p.MemPercent),
+		}))
+	}
+
+	return renderBox(fmt.Sprintf("Processes (%d)", len(n.Processes)), colorCyan, width, lines)
 }
 
 func roleOr(role string) string {

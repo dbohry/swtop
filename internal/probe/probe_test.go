@@ -51,7 +51,7 @@ func itoa(v uint64) string {
 
 func TestParseFirstSample(t *testing.T) {
 	out := sampleOutput(1000, 500, 1_000_000, 2_000_000)
-	host, containers, sample := Parse(out, nil)
+	host, containers, _, sample := Parse(out, nil)
 
 	if host.CPUPercent != 0 {
 		t.Errorf("expected 0%% CPU on first sample, got %v", host.CPUPercent)
@@ -95,11 +95,11 @@ func TestParseFirstSample(t *testing.T) {
 
 func TestParseSecondSampleComputesDeltas(t *testing.T) {
 	first := sampleOutput(1000, 500, 1_000_000, 2_000_000)
-	_, _, prevSample := Parse(first, nil)
+	_, _, _, prevSample := Parse(first, nil)
 	prevSample.Timestamp = time.Now().Add(-2 * time.Second)
 
 	second := sampleOutput(3000, 1000, 1_500_000, 2_400_000)
-	host, _, sample := Parse(second, &prevSample)
+	host, _, _, sample := Parse(second, &prevSample)
 
 	if host.CPUPercent < 74 || host.CPUPercent > 76 {
 		t.Errorf("expected ~75%% CPU, got %v", host.CPUPercent)

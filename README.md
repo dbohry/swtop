@@ -5,7 +5,7 @@
 
 A `btop`/`htop`-style terminal UI for a Docker Swarm cluster. Connects to every node over SSH and shows a consolidated cluster view plus a per-node view (CPU, memory, disk, network, and containers).
 
-Plain servers with no Docker at all are welcome too — list them under `servers` and swtop just shows host resources for them, no containers panel, no `docker` calls made.
+Plain servers with no Docker at all are welcome too — list them under `servers` and swtop shows host resources plus a top-processes list for them (sorted by CPU%, like `htop`) instead of a containers panel, and no `docker` calls are ever made.
 
 <img width="1258" height="657" alt="Screenshot 2026-09-15 at 15 46 10" src="https://github.com/user-attachments/assets/75fb82d9-9e58-4304-beb2-aadbf708650e" />
 <img width="1261" height="656" alt="Screenshot 2026-09-15 at 15 46 25" src="https://github.com/user-attachments/assets/38f73264-19b6-4ffe-bb15-7d0ad4806aa7" />
@@ -23,7 +23,7 @@ Plain servers with no Docker at all are welcome too — list them under `servers
 - `docker` CLI able to talk to the local engine (SSH user is `root` or in the `docker` group)
 
 **Each plain server (listed under `servers`, see below):**
-- SSH server, standard Linux `/proc`, and `df` — that's it, no Docker required
+- SSH server, standard Linux `/proc`, `df`, and `ps` — that's it, no Docker required
 
 ## Setup
 
@@ -60,8 +60,9 @@ Plain servers with no Docker at all are welcome too — list them under `servers
 
    `nodes` are Docker/Swarm hosts (`docker stats`/`docker ps` are polled, containers
    show up in the UI). `servers` are plain SSH boxes monitored for resources only —
-   same config shape, minus `role`, and no `docker` command is ever run against them.
-   Names must be unique across both lists.
+   same config shape, minus `role`; instead of containers, their detail view shows
+   the top OS processes by CPU% (via `ps`), and no `docker` command is ever run
+   against them. Names must be unique across both lists.
 
 3. Run:
    ```sh

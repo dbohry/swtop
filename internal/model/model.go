@@ -61,16 +61,29 @@ type Container struct {
 	PIDs int
 }
 
+type Process struct {
+	PID        int
+	Command    string
+	CPUPercent float64
+	MemPercent float64
+}
+
 type NodeSnapshot struct {
 	Name    string
 	Address string
 	Role    string
+
+	// Docker reports whether this host runs the Docker engine (a "node",
+	// as opposed to a plain "server"). It decides whether the UI shows
+	// Containers or a plain process list for this host.
+	Docker bool
 
 	Online bool
 	Err    string
 
 	Host       HostStats
 	Containers []Container
+	Processes  []Process
 
 	UpdatedAt time.Time
 }
