@@ -97,12 +97,23 @@ func wrapHostKeyCallback(inner ssh.HostKeyCallback, knownHostsFile string) ssh.H
 	}
 }
 
+// authMethods collects every candidate key (from a running SSH agent and/or
+// identity_file) into a single ssh.PublicKeys AuthMethod.
+//
+// This must NOT be split into separate AuthMethod entries per key source:
+// the ssh package's client-side auth loop dedupes config.Auth entries by
+// RFC 4252 method name, so a second "publickey" entry is silently skipped
+// once any earlier "publickey" entry has been tried — even if that earlier
+// one offered zero usable keys (e.g. an agent with no identities loaded).
+// That would make the identity_file key never get attempted at all.
 func authMethods(identityFile string) ([]ssh.AuthMethod, error) {
-	var methods []ssh.AuthMethod
+	var signers []ssh.Signer
 
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
 		if conn, err := net.Dial("unix", sock); err == nil {
-			methods = append(methods, ssh.PublicKeysCallback(agent.NewClient(conn).Signers))
+			if agentSigners, err := agent.NewClient(conn).Signers(); err == nil {
+				signers = append(signers, agentSigners...)
+			}
 		}
 	}
 
@@ -110,24 +121,24 @@ func authMethods(identityFile string) ([]ssh.AuthMethod, error) {
 		path := expandHome(identityFile)
 		key, err := os.ReadFile(path)
 		if err != nil {
-			return methods, fmt.Errorf("reading identity file %s: %w", path, err)
+			return nil, fmt.Errorf("reading identity file %s: %w", path, err)
 		}
 		signer, err := ssh.ParsePrivateKey(key)
 		if err != nil {
 			if strings.HasSuffix(path, ".pub") {
-				return methods, fmt.Errorf(
+				return nil, fmt.Errorf(
 					"identity_file %s looks like a public key, but it must point at the matching "+
 						"private key (same name without .pub): %w", path, err)
 			}
-			return methods, fmt.Errorf("parsing identity file %s: %w", path, err)
+			return nil, fmt.Errorf("parsing identity file %s: %w", path, err)
 		}
-		methods = append(methods, ssh.PublicKeys(signer))
+		signers = append(signers, signer)
 	}
 
-	if len(methods) == 0 {
+	if len(signers) == 0 {
 		return nil, fmt.Errorf("no SSH auth available: set identity_file or run an ssh-agent with SSH_AUTH_SOCK")
 	}
-	return methods, nil
+	return []ssh.AuthMethod{ssh.PublicKeys(signers...)}, nil
 }
 
 // buildConfig assembles a fresh ssh.ClientConfig on every call, re-reading
