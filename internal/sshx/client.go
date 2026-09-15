@@ -9,8 +9,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -28,12 +28,11 @@ type Config struct {
 }
 
 // Client is a lazily-connected, auto-reconnecting SSH session runner.
-// It is safe for concurrent use but commands against the same Client are
-// serialized (each poller owns its own Client, so this only matters for
-// Close/Ensure races).
+// A Client is driven by exactly one goroutine at a time (the collector's
+// per-node poller owns it for its whole lifetime), so it needs no internal
+// locking.
 type Client struct {
 	cfg    Config
-	mu     sync.Mutex
 	client *ssh.Client
 }
 
@@ -97,6 +96,33 @@ func wrapHostKeyCallback(inner ssh.HostKeyCallback, knownHostsFile string) ssh.H
 	}
 }
 
+// recordedHostKeyAlgorithms extracts the key algorithm(s) knownhosts has on
+// record for a host from a "key changed" error, so ensure can retry the
+// dial preferring those algorithms. This matters because our default
+// HostKeyAlgorithms order (ED25519 first, see buildConfig) can pick a
+// different key type than the one actually recorded for a given host, which
+// knownhosts then reports as "changed" even though the real trusted key was
+// never actually compared. Retrying only ever re-runs the same knownhosts
+// check against whatever key gets negotiated, so it cannot weaken
+// verification -- it can only let a genuinely trusted key succeed where the
+// first attempt compared the wrong pair.
+func recordedHostKeyAlgorithms(err error) []string {
+	var keyErr *knownhosts.KeyError
+	if !errors.As(err, &keyErr) || len(keyErr.Want) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(keyErr.Want))
+	var algos []string
+	for _, want := range keyErr.Want {
+		t := want.Key.Type()
+		if !seen[t] {
+			seen[t] = true
+			algos = append(algos, t)
+		}
+	}
+	return algos
+}
+
 // authMethods collects every candidate key (from a running SSH agent and/or
 // identity_file) into a single ssh.PublicKeys AuthMethod.
 //
@@ -125,10 +151,10 @@ func authMethods(identityFile string) ([]ssh.AuthMethod, error) {
 		}
 		signer, err := ssh.ParsePrivateKey(key)
 		if err != nil {
-			if strings.HasSuffix(path, ".pub") {
+			if _, _, _, _, pubErr := ssh.ParseAuthorizedKey(key); pubErr == nil {
 				return nil, fmt.Errorf(
-					"identity_file %s looks like a public key, but it must point at the matching "+
-						"private key (same name without .pub): %w", path, err)
+					"identity_file %s contains a public key, not a private key — point it at the "+
+						"matching private key instead (usually the same filename without .pub): %w", path, err)
 			}
 			return nil, fmt.Errorf("parsing identity file %s: %w", path, err)
 		}
@@ -141,11 +167,44 @@ func authMethods(identityFile string) ([]ssh.AuthMethod, error) {
 	return []ssh.AuthMethod{ssh.PublicKeys(signers...)}, nil
 }
 
+// defaultHostKeyAlgorithms is the fallback preference order for a host with
+// nothing (yet) recorded in known_hosts. golang.org/x/crypto/ssh's own
+// default order puts RSA/ECDSA ahead of ED25519; most modern sshd/ssh
+// clients do the opposite, so match that instead.
+var defaultHostKeyAlgorithms = []string{
+	ssh.KeyAlgoED25519,
+	ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521,
+	ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSA,
+}
+
+// hostKeyAlgorithms puts preferred first (deduplicated), then fills in the
+// rest of defaultHostKeyAlgorithms as a fallback.
+func hostKeyAlgorithms(preferred []string) []string {
+	if len(preferred) == 0 {
+		return defaultHostKeyAlgorithms
+	}
+	seen := make(map[string]bool, len(preferred))
+	algos := make([]string, 0, len(preferred)+len(defaultHostKeyAlgorithms))
+	for _, a := range preferred {
+		if !seen[a] {
+			seen[a] = true
+			algos = append(algos, a)
+		}
+	}
+	for _, a := range defaultHostKeyAlgorithms {
+		if !seen[a] {
+			seen[a] = true
+			algos = append(algos, a)
+		}
+	}
+	return algos
+}
+
 // buildConfig assembles a fresh ssh.ClientConfig on every call, re-reading
 // the identity file and ~/.ssh/known_hosts from disk. This is deliberately
 // not cached: it lets a fix to known_hosts (or a rotated key) take effect
 // on the next reconnect attempt without having to restart swtop.
-func buildConfig(cfg Config) (*ssh.ClientConfig, error) {
+func buildConfig(cfg Config, preferredHostKeyAlgos []string) (*ssh.ClientConfig, error) {
 	methods, err := authMethods(cfg.IdentityFile)
 	if err != nil {
 		return nil, err
@@ -156,46 +215,48 @@ func buildConfig(cfg Config) (*ssh.ClientConfig, error) {
 	}
 
 	return &ssh.ClientConfig{
-		User:            cfg.User,
-		Auth:            methods,
-		HostKeyCallback: hkcb,
-		// golang.org/x/crypto/ssh's own default order puts RSA/ECDSA ahead of
-		// ED25519. A server offering multiple host key types (the sshd
-		// default) then negotiates a different key than a real ssh/ssh-keyscan
-		// client would, and knownhosts reports a false "key changed" against
-		// the ED25519 line that's actually recorded. Prefer ED25519 first to
-		// match what ssh_host_*_key setups and modern OpenSSH clients do.
-		HostKeyAlgorithms: []string{
-			ssh.KeyAlgoED25519,
-			ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521,
-			ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSA,
-		},
-		Timeout: cfg.Timeout,
+		User:              cfg.User,
+		Auth:              methods,
+		HostKeyCallback:   hkcb,
+		HostKeyAlgorithms: hostKeyAlgorithms(preferredHostKeyAlgos),
+		Timeout:           cfg.Timeout,
 	}, nil
 }
 
-func (c *Client) ensure() (*ssh.Client, error) {
-	c.mu.Lock()
-	existing := c.client
-	c.mu.Unlock()
-	if existing != nil {
-		return existing, nil
-	}
-
-	cfg, err := buildConfig(c.cfg)
+func (c *Client) dial(addr string, preferredHostKeyAlgos []string) (*ssh.Client, error) {
+	cfg, err := buildConfig(c.cfg, preferredHostKeyAlgos)
 	if err != nil {
 		return nil, err
 	}
-
-	addr := net.JoinHostPort(c.cfg.Host, fmt.Sprintf("%d", c.cfg.Port))
 	conn, err := ssh.Dial("tcp", addr, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
+	return conn, nil
+}
 
-	c.mu.Lock()
+func (c *Client) ensure() (*ssh.Client, error) {
+	if c.client != nil {
+		return c.client, nil
+	}
+
+	addr := net.JoinHostPort(c.cfg.Host, strconv.Itoa(c.cfg.Port))
+
+	conn, err := c.dial(addr, nil)
+	if err != nil {
+		// See recordedHostKeyAlgorithms: retry once preferring whatever
+		// algorithm(s) are actually on record for this host.
+		if preferred := recordedHostKeyAlgorithms(err); len(preferred) > 0 {
+			if retryConn, retryErr := c.dial(addr, preferred); retryErr == nil {
+				conn, err = retryConn, nil
+			}
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+
 	c.client = conn
-	c.mu.Unlock()
 	return conn, nil
 }
 
@@ -227,8 +288,6 @@ func (c *Client) Run(cmd string) (string, error) {
 }
 
 func (c *Client) drop() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.client != nil {
 		_ = c.client.Close()
 		c.client = nil
@@ -237,8 +296,6 @@ func (c *Client) drop() {
 
 // Close releases the underlying connection, if any.
 func (c *Client) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.client == nil {
 		return nil
 	}

@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -17,7 +16,6 @@ import (
 )
 
 type snapshotMsg model.ClusterSnapshot
-type tickMsg time.Time
 
 // Model is the bubbletea model driving the whole TUI.
 type Model struct {
@@ -45,12 +43,8 @@ func waitForSnapshot(ch <-chan model.ClusterSnapshot) tea.Cmd {
 	}
 }
 
-func tickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
-}
-
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(waitForSnapshot(m.snapshots), tickCmd())
+	return waitForSnapshot(m.snapshots)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -65,9 +59,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeTab = 0
 		}
 		return m, waitForSnapshot(m.snapshots)
-
-	case tickMsg:
-		return m, tickCmd()
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -142,16 +133,7 @@ func (m Model) renderCluster() string {
 	var b strings.Builder
 	agg := m.cluster.Aggregate()
 
-	barWidth := 30
-	if m.width > 0 {
-		barWidth = m.width/2 - 20
-		if barWidth < 10 {
-			barWidth = 10
-		}
-		if barWidth > 40 {
-			barWidth = 40
-		}
-	}
+	barWidth := clampBarWidth(m.width, 2, 20, 30, 10, 40)
 
 	b.WriteString(sectionTitleStyle.Render("Cluster (consolidated as one machine)"))
 	b.WriteString("\n")
@@ -161,7 +143,7 @@ func (m Model) renderCluster() string {
 	b.WriteString("\n")
 	b.WriteString(bar("Disk", percentOf(agg.DiskUsedKB, agg.DiskTotalKB), barWidth, fmt.Sprintf("%s / %s", humanizeKB(agg.DiskUsedKB), humanizeKB(agg.DiskTotalKB))))
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("%-8s ↓ %-12s ↑ %-12s  load %.2f / %.2f / %.2f\n", "Net", humanizeRate(agg.NetRxBytesPerSec), humanizeRate(agg.NetTxBytesPerSec), agg.Load1, agg.Load5, agg.Load15))
+	b.WriteString(netLoadLine(agg))
 
 	b.WriteString(sectionTitleStyle.Render("Nodes"))
 	b.WriteString("\n")
@@ -247,16 +229,7 @@ func (m Model) renderNode(n model.NodeSnapshot) string {
 	b.WriteString(headerStyle.Render(fmt.Sprintf("uptime %s   last update %s", humanizeUptime(n.Host.Uptime), n.UpdatedAt.Format("15:04:05"))))
 	b.WriteString("\n")
 
-	barWidth := 24
-	if m.width > 0 {
-		barWidth = m.width/3 - 20
-		if barWidth < 8 {
-			barWidth = 8
-		}
-		if barWidth > 30 {
-			barWidth = 30
-		}
-	}
+	barWidth := clampBarWidth(m.width, 3, 20, 24, 8, 30)
 
 	// Per-core CPU bars, wrapped into rows of up to 4.
 	perRow := 4
@@ -285,7 +258,7 @@ func (m Model) renderNode(n model.NodeSnapshot) string {
 	}
 	b.WriteString(bar("Disk", percentOf(n.Host.DiskUsedKB, n.Host.DiskTotalKB), barWidth*2, fmt.Sprintf("%s / %s", humanizeKB(n.Host.DiskUsedKB), humanizeKB(n.Host.DiskTotalKB))))
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("%-8s ↓ %-12s ↑ %-12s  load %.2f / %.2f / %.2f\n", "Net", humanizeRate(n.Host.NetRxBytesPerSec), humanizeRate(n.Host.NetTxBytesPerSec), n.Host.Load1, n.Host.Load5, n.Host.Load15))
+	b.WriteString(netLoadLine(n.Host))
 
 	b.WriteString(sectionTitleStyle.Render(fmt.Sprintf("Containers (%d)", len(n.Containers))))
 	b.WriteString("\n")
@@ -343,4 +316,26 @@ func totalCores(c model.ClusterSnapshot) int {
 		}
 	}
 	return n
+}
+
+// clampBarWidth derives a gauge width from the terminal width, falling back
+// to def before the first WindowSizeMsg (screenWidth == 0) and otherwise
+// clamping screenWidth/divisor-offset to [min, max].
+func clampBarWidth(screenWidth, divisor, offset, def, min, max int) int {
+	if screenWidth <= 0 {
+		return def
+	}
+	w := screenWidth/divisor - offset
+	if w < min {
+		return min
+	}
+	if w > max {
+		return max
+	}
+	return w
+}
+
+func netLoadLine(h model.HostStats) string {
+	return fmt.Sprintf("%-8s ↓ %-12s ↑ %-12s  load %.2f / %.2f / %.2f\n",
+		"Net", humanizeRate(h.NetRxBytesPerSec), humanizeRate(h.NetTxBytesPerSec), h.Load1, h.Load5, h.Load15)
 }
