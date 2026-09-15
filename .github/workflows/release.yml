@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_call:
+    inputs:
+      ref:
+        description: "Tag to check out and release"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -27,6 +33,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref_name }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -43,7 +51,8 @@ jobs:
           ext=""
           [ "$GOOS" = "windows" ] && ext=".exe"
           out="dist/swtop-${GOOS}-${GOARCH}${ext}"
-          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$out" ./cmd/swtop
+          tag="${{ inputs.ref || github.ref_name }}"
+          go build -trimpath -ldflags "-s -w -X main.version=${tag}" -o "$out" ./cmd/swtop
 
       - name: Package
         run: |
@@ -75,5 +84,6 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.ref || github.ref_name }}
           files: dist/*
           generate_release_notes: true
