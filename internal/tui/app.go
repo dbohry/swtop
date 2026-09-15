@@ -20,6 +20,11 @@ import (
 // tea.WindowSizeMsg arrives (briefly, at startup).
 const defaultWidth = 80
 
+// minViewportHeight is the smallest the scrollable body is ever sized to,
+// even if the pinned header's natural content (e.g. many per-core CPU rows
+// on a narrow terminal) would otherwise leave no room for it.
+const minViewportHeight = 3
+
 type snapshotMsg model.ClusterSnapshot
 
 // Model is the bubbletea model driving the whole TUI.
@@ -112,8 +117,8 @@ func (m *Model) syncViewport() {
 		width = defaultWidth
 	}
 	height := m.height - strings.Count(header, "\n") - footerLines
-	if height < 3 {
-		height = 3
+	if height < minViewportHeight {
+		height = minViewportHeight
 	}
 
 	m.viewport.Width = width
@@ -126,15 +131,34 @@ func (m Model) View() string {
 	return header + m.viewport.View() + "\n" + m.renderFooter()
 }
 
+// effectiveWidth is the terminal width to lay out against, substituting
+// defaultWidth before the first WindowSizeMsg arrives (m.width == 0).
+func (m Model) effectiveWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	return defaultWidth
+}
+
 // layout renders the pinned header (tabs plus gauges/summary) and the
 // scrollable body (the tables) for the current state, plus how many lines
 // the footer occupies. header always ends with a trailing newline.
+//
+// Every header line is clamped to the terminal width as a safety net: a
+// line built from a fixed-length format string (the footer, the net/load
+// line) or from content whose length isn't fully budgeted for (detail text
+// next to a gauge) can end up wider than the terminal despite the
+// responsive sizing elsewhere. In a real terminal that overflow doesn't
+// just clip -- it auto-wraps onto an extra physical row that this layout's
+// line-count-based height budget never accounted for, pushing everything
+// below it (in the worst case, the whole header) off the visible screen.
 func (m Model) layout() (header, body string, footerLines int) {
+	width := m.effectiveWidth()
+
 	header = m.renderTabs() + "\n"
 	if m.activeTab == 0 {
-		h, b := m.renderClusterHeader(), m.renderClusterBody()
-		header += h
-		body = b
+		header += m.renderClusterHeader()
+		body = m.renderClusterBody()
 	} else if idx := m.activeTab - 1; idx < len(m.cluster.Nodes) {
 		node := m.cluster.Nodes[idx]
 		header += m.renderNodeHeader(node)
@@ -142,7 +166,31 @@ func (m Model) layout() (header, body string, footerLines int) {
 			body = m.renderNodeBody(node)
 		}
 	}
-	return header, body, 1
+	header = clampLines(header, width)
+
+	// Reserve room for the scrollable body and the footer even when the
+	// header's own content (e.g. many per-core CPU rows on a narrow
+	// terminal) would otherwise be taller than the whole terminal.
+	footerLines = 1
+	if maxHeaderLines := m.height - minViewportHeight - footerLines; maxHeaderLines > 0 {
+		header = capLines(header, maxHeaderLines)
+	}
+
+	return header, body, footerLines
+}
+
+// capLines keeps at most the first maxLines lines of s. header always ends
+// with a trailing newline; when actually truncating, that invariant has to
+// be re-added explicitly, since slicing off the rest of the lines slices
+// off the empty trailing element a trailing "\n" produces too. Without it,
+// the caller's header+viewport concatenation would merge the last kept
+// header line directly into the viewport's first line.
+func capLines(s string, maxLines int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxLines {
+		return s
+	}
+	return strings.Join(lines[:maxLines], "\n") + "\n"
 }
 
 func (m Model) renderFooter() string {
@@ -150,10 +198,11 @@ func (m Model) renderFooter() string {
 	if m.sortByMem {
 		sortLabel = "mem"
 	}
-	return footerStyle.Render(fmt.Sprintf(
+	text := fmt.Sprintf(
 		"tab/←→: switch view   1-%d: jump to node   ↑↓/pgup/pgdn: scroll   s: sort by %s   q: quit   updated %s",
 		len(m.cluster.Nodes), sortLabel, m.cluster.UpdatedAt.Format("15:04:05"),
-	))
+	)
+	return footerStyle.Render(clampLines(text, m.effectiveWidth()))
 }
 
 func (m Model) renderTabs() string {
@@ -214,7 +263,7 @@ func (m Model) renderClusterBody() string {
 		{title: "CPU%", width: 6, right: true},
 		{title: "MEM%", width: 6, right: true},
 		{title: "CONTAINERS", width: 10, right: true},
-	}, m.width, 10)
+	}, m.width)
 	b.WriteString(renderHeader(cols))
 	b.WriteString("\n")
 	for _, n := range m.cluster.Nodes {
@@ -252,7 +301,7 @@ func (m Model) renderClusterBody() string {
 			{title: "NODES", width: 6, right: true},
 			{title: "CPU%", width: 8, right: true},
 			{title: "MEM", width: 10, right: true},
-		}, m.width, 10)
+		}, m.width)
 		b.WriteString(renderHeader(scols))
 		b.WriteString("\n")
 		for _, s := range svcs {
@@ -294,8 +343,8 @@ func (m Model) renderNodeHeader(n model.NodeSnapshot) string {
 
 	barWidth := clampBarWidth(m.width, 3, 20, 24, 8, 30)
 
-	// Per-core CPU bars, wrapped into rows of up to 4.
-	perRow := 4
+	// Per-core CPU bars, wrapped so each row fits the terminal width.
+	perRow := coresPerRow(m.effectiveWidth(), barWidth)
 	for i := 0; i < len(n.Host.PerCoreCPU); i += perRow {
 		end := i + perRow
 		if end > len(n.Host.PerCoreCPU) {
@@ -349,8 +398,8 @@ func (m Model) renderNodeBody(n model.NodeSnapshot) string {
 		{title: "NET IO", width: 18, right: true},
 		{title: "BLOCK IO", width: 18, right: true},
 		{title: "PIDS", width: 5, right: true},
-		{title: "STATUS", width: 16},
-	}, m.width, 8)
+		{title: "STATUS", width: 16, flexWeight: 2},
+	}, m.width)
 	b.WriteString(renderHeader(cols))
 	b.WriteString("\n")
 	for _, c := range containers {
@@ -407,4 +456,40 @@ func clampBarWidth(screenWidth, divisor, offset, def, min, max int) int {
 func netLoadLine(h model.HostStats) string {
 	return fmt.Sprintf("%-8s ↓ %-12s ↑ %-12s  load %.2f / %.2f / %.2f\n",
 		"Net", humanizeRate(h.NetRxBytesPerSec), humanizeRate(h.NetTxBytesPerSec), h.Load1, h.Load5, h.Load15)
+}
+
+// coresPerRow returns how many per-core gauges (see bar(), called with no
+// detail text) fit on one row of the given width without wrapping.
+// "%-8s [<barWidth>] <pct>" is 18 columns of overhead around the bar itself
+// (label, brackets, spacing, percentage), and cells are joined by colGap.
+func coresPerRow(width, barWidth int) int {
+	const overhead = 18
+	cellWidth := barWidth + overhead
+	n := (width + colGap) / (cellWidth + colGap)
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// clampLines truncates each line of s to width, so a line that's wider than
+// the terminal (whether from an under-budgeted format string or content
+// whose length isn't accounted for) can never auto-wrap in the real
+// terminal and throw off the height layout. ANSI styling is preserved.
+//
+// Lines are clamped one at a time rather than handing the whole multi-line
+// string to a single lipgloss Style.Render() call: lipgloss treats a
+// trailing "\n" as introducing an extra (empty) line and, with no explicit
+// Width set, pads every line out to the width of the widest one -- both of
+// which corrupt a header string's line structure instead of just capping
+// long lines.
+func clampLines(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = lipgloss.NewStyle().MaxWidth(width).Render(line)
+	}
+	return strings.Join(lines, "\n")
 }
