@@ -116,6 +116,11 @@ func authMethods(identityFile string) ([]ssh.AuthMethod, error) {
 		}
 		signer, err := ssh.ParsePrivateKey(key)
 		if err != nil {
+			if strings.HasSuffix(path, ".pub") {
+				return methods, fmt.Errorf(
+					"identity_file %s looks like a public key, but it must point at the matching "+
+						"private key (same name without .pub): %w", path, err)
+			}
 			return methods, fmt.Errorf("parsing identity file %s: %w", path, err)
 		}
 		methods = append(methods, ssh.PublicKeys(signer))
