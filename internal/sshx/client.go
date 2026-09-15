@@ -32,11 +32,9 @@ type Config struct {
 // serialized (each poller owns its own Client, so this only matters for
 // Close/Ensure races).
 type Client struct {
-	cfg        Config
-	mu         sync.Mutex
-	client     *ssh.Client
-	clientCfg  *ssh.ClientConfig
-	clientCfgE error
+	cfg    Config
+	mu     sync.Mutex
+	client *ssh.Client
 }
 
 // New creates a Client. It does not connect until the first Run call.
@@ -132,31 +130,26 @@ func authMethods(identityFile string) ([]ssh.AuthMethod, error) {
 	return methods, nil
 }
 
-func (c *Client) buildConfig() (*ssh.ClientConfig, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.clientCfg != nil || c.clientCfgE != nil {
-		return c.clientCfg, c.clientCfgE
-	}
-
-	methods, err := authMethods(c.cfg.IdentityFile)
+// buildConfig assembles a fresh ssh.ClientConfig on every call, re-reading
+// the identity file and ~/.ssh/known_hosts from disk. This is deliberately
+// not cached: it lets a fix to known_hosts (or a rotated key) take effect
+// on the next reconnect attempt without having to restart swtop.
+func buildConfig(cfg Config) (*ssh.ClientConfig, error) {
+	methods, err := authMethods(cfg.IdentityFile)
 	if err != nil {
-		c.clientCfgE = err
 		return nil, err
 	}
 	hkcb, err := hostKeyCallback()
 	if err != nil {
-		c.clientCfgE = err
 		return nil, err
 	}
 
-	c.clientCfg = &ssh.ClientConfig{
-		User:            c.cfg.User,
+	return &ssh.ClientConfig{
+		User:            cfg.User,
 		Auth:            methods,
 		HostKeyCallback: hkcb,
-		Timeout:         c.cfg.Timeout,
-	}
-	return c.clientCfg, nil
+		Timeout:         cfg.Timeout,
+	}, nil
 }
 
 func (c *Client) ensure() (*ssh.Client, error) {
@@ -167,7 +160,7 @@ func (c *Client) ensure() (*ssh.Client, error) {
 		return existing, nil
 	}
 
-	cfg, err := c.buildConfig()
+	cfg, err := buildConfig(c.cfg)
 	if err != nil {
 		return nil, err
 	}
