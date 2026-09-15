@@ -13,6 +13,8 @@ import (
 	"github.com/dbohry/swtop/internal/tui"
 )
 
+var version = "dev"
+
 func defaultConfigPath() string {
 	if home, err := os.UserHomeDir(); err == nil {
 		p := filepath.Join(home, ".config", "swtop", "config.yaml")
@@ -25,7 +27,13 @@ func defaultConfigPath() string {
 
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to swtop config YAML")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("swtop " + version)
+		return
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
