@@ -10,9 +10,6 @@ import (
 	"github.com/dbohry/swtop/internal/model"
 )
 
-// HostScript collects only OS-level stats (CPU, memory, disk, network) and
-// makes no assumption about Docker being installed. Used for plain
-// SSH-monitored servers that aren't part of the Docker/Swarm fleet.
 const HostScript = `
 echo '@@CPU'
 cat /proc/stat 2>/dev/null
@@ -28,8 +25,6 @@ echo '@@DISK'
 df -kP / 2>/dev/null | tail -n +2
 `
 
-// Script extends HostScript with Docker container stats, for nodes running
-// the Docker engine (swarm managers/workers).
 const Script = HostScript + `
 echo '@@DOCKERSTATS'
 docker stats --no-stream --no-trunc --format '{{json .}}' 2>/dev/null
@@ -37,9 +32,6 @@ echo '@@DOCKERPS'
 docker ps --no-trunc --format '{{json .}}' 2>/dev/null
 `
 
-// ServerScript extends HostScript with a plain OS process list, for plain
-// servers that don't run Docker and so have nothing to show in a
-// containers panel.
 const ServerScript = HostScript + `
 echo '@@PROCESSES'
 ps -eo pid,%cpu,%mem,comm:64 --no-headers --sort=-%cpu 2>/dev/null | head -n 20

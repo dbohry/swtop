@@ -73,9 +73,6 @@ type NodeSnapshot struct {
 	Address string
 	Role    string
 
-	// Docker reports whether this host runs the Docker engine (a "node",
-	// as opposed to a plain "server"). It decides whether the UI shows
-	// Containers or a plain process list for this host.
 	Docker bool
 
 	Online bool

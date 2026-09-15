@@ -40,9 +40,6 @@ type NodeConfig struct {
 	IdentityFile string `yaml:"identity_file"`
 	Port         int    `yaml:"port"`
 
-	// Docker reports whether this host should be probed for container
-	// stats. It is set by Load based on which list (nodes vs servers) the
-	// entry came from, never read from YAML.
 	Docker bool `yaml:"-"`
 }
 
