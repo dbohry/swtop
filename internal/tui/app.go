@@ -9,11 +9,16 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/dbohry/swtop/internal/model"
 )
+
+// defaultWidth is used to size gauges/tables before the first
+// tea.WindowSizeMsg arrives (briefly, at startup).
+const defaultWidth = 80
 
 type snapshotMsg model.ClusterSnapshot
 
@@ -26,6 +31,11 @@ type Model struct {
 	sortByMem bool
 
 	width, height int
+
+	// viewport scrolls the tables (Nodes/Services on the cluster view,
+	// Containers on a node view) when they don't fit the terminal height;
+	// everything else (gauges, tabs, footer) stays pinned.
+	viewport viewport.Model
 }
 
 // New builds a Model that reads cluster snapshots from ch.
@@ -48,17 +58,18 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		return m, nil
 
 	case snapshotMsg:
 		m.cluster = model.ClusterSnapshot(msg)
 		if m.activeTab > len(m.cluster.Nodes) {
 			m.activeTab = 0
 		}
-		return m, waitForSnapshot(m.snapshots)
+		cmd = waitForSnapshot(m.snapshots)
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -66,43 +77,83 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "tab", "right", "l":
 			m.activeTab = (m.activeTab + 1) % (len(m.cluster.Nodes) + 1)
+			m.viewport.GotoTop()
 		case "shift+tab", "left", "h":
 			m.activeTab = (m.activeTab - 1 + len(m.cluster.Nodes) + 1) % (len(m.cluster.Nodes) + 1)
+			m.viewport.GotoTop()
 		case "s":
 			m.sortByMem = !m.sortByMem
 		default:
 			if n, err := strconv.Atoi(msg.String()); err == nil && n >= 0 && n <= len(m.cluster.Nodes) {
 				m.activeTab = n
+				m.viewport.GotoTop()
+			} else {
+				// Not one of ours (e.g. up/down/pgup/pgdown) -- let the
+				// viewport handle scrolling.
+				m.viewport, cmd = m.viewport.Update(msg)
 			}
 		}
-		return m, nil
 	}
-	return m, nil
+
+	m.syncViewport()
+	return m, cmd
+}
+
+// syncViewport resizes the viewport to fit around the current header/footer
+// and refreshes its content. Content changes (a new snapshot, a sort
+// toggle) always need this; it's cheap enough to just do unconditionally
+// after every message. SetContent preserves the current scroll offset, so
+// this never disturbs an in-progress scroll.
+func (m *Model) syncViewport() {
+	header, body, footerLines := m.layout()
+
+	width := m.width
+	if width <= 0 {
+		width = defaultWidth
+	}
+	height := m.height - strings.Count(header, "\n") - footerLines
+	if height < 3 {
+		height = 3
+	}
+
+	m.viewport.Width = width
+	m.viewport.Height = height
+	m.viewport.SetContent(body)
 }
 
 func (m Model) View() string {
-	var b strings.Builder
+	header, _, _ := m.layout()
+	return header + m.viewport.View() + "\n" + m.renderFooter()
+}
 
-	b.WriteString(m.renderTabs())
-	b.WriteString("\n")
-
+// layout renders the pinned header (tabs plus gauges/summary) and the
+// scrollable body (the tables) for the current state, plus how many lines
+// the footer occupies. header always ends with a trailing newline.
+func (m Model) layout() (header, body string, footerLines int) {
+	header = m.renderTabs() + "\n"
 	if m.activeTab == 0 {
-		b.WriteString(m.renderCluster())
+		h, b := m.renderClusterHeader(), m.renderClusterBody()
+		header += h
+		body = b
 	} else if idx := m.activeTab - 1; idx < len(m.cluster.Nodes) {
-		b.WriteString(m.renderNode(m.cluster.Nodes[idx]))
+		node := m.cluster.Nodes[idx]
+		header += m.renderNodeHeader(node)
+		if node.Online {
+			body = m.renderNodeBody(node)
+		}
 	}
+	return header, body, 1
+}
 
-	b.WriteString("\n")
+func (m Model) renderFooter() string {
 	sortLabel := "cpu%"
 	if m.sortByMem {
 		sortLabel = "mem"
 	}
-	b.WriteString(footerStyle.Render(fmt.Sprintf(
-		"tab/←→: switch view   1-%d: jump to node   s: sort by %s   q: quit   updated %s",
+	return footerStyle.Render(fmt.Sprintf(
+		"tab/←→: switch view   1-%d: jump to node   ↑↓/pgup/pgdn: scroll   s: sort by %s   q: quit   updated %s",
 		len(m.cluster.Nodes), sortLabel, m.cluster.UpdatedAt.Format("15:04:05"),
-	)))
-
-	return b.String()
+	))
 }
 
 func (m Model) renderTabs() string {
@@ -129,7 +180,10 @@ func (m Model) renderTabs() string {
 	return title + sub + "\n" + strings.Join(parts, " ")
 }
 
-func (m Model) renderCluster() string {
+// renderClusterHeader is the pinned part of the cluster view: the
+// consolidated gauges. The Nodes/Services tables scroll separately, in
+// renderClusterBody.
+func (m Model) renderClusterHeader() string {
 	var b strings.Builder
 	agg := m.cluster.Aggregate()
 
@@ -145,16 +199,22 @@ func (m Model) renderCluster() string {
 	b.WriteString("\n")
 	b.WriteString(netLoadLine(agg))
 
+	return b.String()
+}
+
+func (m Model) renderClusterBody() string {
+	var b strings.Builder
+
 	b.WriteString(sectionTitleStyle.Render("Nodes"))
 	b.WriteString("\n")
-	cols := []column{
-		{title: "NAME", width: 16},
+	cols := fitColumns([]column{
+		{title: "NAME", width: 16, flexWeight: 1},
 		{title: "ROLE", width: 8},
 		{title: "STATUS", width: 8},
 		{title: "CPU%", width: 6, right: true},
 		{title: "MEM%", width: 6, right: true},
 		{title: "CONTAINERS", width: 10, right: true},
-	}
+	}, m.width, 10)
 	b.WriteString(renderHeader(cols))
 	b.WriteString("\n")
 	for _, n := range m.cluster.Nodes {
@@ -186,13 +246,13 @@ func (m Model) renderCluster() string {
 		})
 		b.WriteString(sectionTitleStyle.Render("Services"))
 		b.WriteString("\n")
-		scols := []column{
-			{title: "NAME", width: 28},
+		scols := fitColumns([]column{
+			{title: "NAME", width: 28, flexWeight: 1},
 			{title: "REPLICAS", width: 8, right: true},
 			{title: "NODES", width: 6, right: true},
 			{title: "CPU%", width: 8, right: true},
 			{title: "MEM", width: 10, right: true},
-		}
+		}, m.width, 10)
 		b.WriteString(renderHeader(scols))
 		b.WriteString("\n")
 		for _, s := range svcs {
@@ -210,11 +270,14 @@ func (m Model) renderCluster() string {
 	return b.String()
 }
 
-func (m Model) renderNode(n model.NodeSnapshot) string {
+// renderNodeHeader is the pinned part of a node view: the title line plus,
+// for an online node, its gauges. For an offline node there's nothing
+// scrollable below it, so layout skips renderNodeBody in that case.
+func (m Model) renderNodeHeader(n model.NodeSnapshot) string {
 	var b strings.Builder
 
-	header := fmt.Sprintf("%s  (%s)  role=%s", n.Name, n.Address, roleOr(n.Role))
-	b.WriteString(sectionTitleStyle.Render(header))
+	title := fmt.Sprintf("%s  (%s)  role=%s", n.Name, n.Address, roleOr(n.Role))
+	b.WriteString(sectionTitleStyle.Render(title))
 	b.WriteString("\n")
 
 	if !n.Online {
@@ -260,6 +323,12 @@ func (m Model) renderNode(n model.NodeSnapshot) string {
 	b.WriteString("\n")
 	b.WriteString(netLoadLine(n.Host))
 
+	return b.String()
+}
+
+func (m Model) renderNodeBody(n model.NodeSnapshot) string {
+	var b strings.Builder
+
 	b.WriteString(sectionTitleStyle.Render(fmt.Sprintf("Containers (%d)", len(n.Containers))))
 	b.WriteString("\n")
 
@@ -272,16 +341,16 @@ func (m Model) renderNode(n model.NodeSnapshot) string {
 		return containers[i].CPUPercent > containers[j].CPUPercent
 	})
 
-	cols := []column{
-		{title: "NAME", width: 24},
-		{title: "SERVICE", width: 18},
+	cols := fitColumns([]column{
+		{title: "NAME", width: 24, flexWeight: 3},
+		{title: "SERVICE", width: 18, flexWeight: 2},
 		{title: "CPU%", width: 6, right: true},
 		{title: "MEM", width: 10, right: true},
 		{title: "NET IO", width: 18, right: true},
 		{title: "BLOCK IO", width: 18, right: true},
 		{title: "PIDS", width: 5, right: true},
 		{title: "STATUS", width: 16},
-	}
+	}, m.width, 8)
 	b.WriteString(renderHeader(cols))
 	b.WriteString("\n")
 	for _, c := range containers {
