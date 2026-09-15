@@ -19,6 +19,8 @@ permissions:
 jobs:
   tag:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.next }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,3 +54,11 @@ jobs:
 
       - name: Summary
         run: echo "### Tagged \`${{ steps.version.outputs.next }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    needs: tag
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      ref: ${{ needs.tag.outputs.tag }}
