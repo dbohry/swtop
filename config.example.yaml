@@ -1,0 +1,31 @@
+# Copy this file to swtop.yaml (or ~/.config/swtop/config.yaml) and edit
+# the nodes list to match your swarm cluster.
+
+# How often each node is polled over SSH.
+poll_interval: 2s
+
+# Defaults applied to any node below that doesn't override them.
+ssh:
+  user: root
+  identity_file: ~/.ssh/id_rsa
+  port: 22
+  timeout: 5s
+
+# Every node in your swarm cluster that you want swtop to monitor.
+# Each node is polled independently over its own SSH connection; there is
+# no dependency on Docker Swarm's manager API, so this works the same for
+# managers and workers. "role" is informational only (shown in the UI).
+nodes:
+  - name: manager-1
+    address: 10.0.0.10
+    role: manager
+
+  - name: worker-1
+    address: 10.0.0.11
+    role: worker
+
+  - name: worker-2
+    address: 10.0.0.12
+    role: worker
+    user: ubuntu          # per-node override of ssh.user
+    port: 2222             # per-node override of ssh.port

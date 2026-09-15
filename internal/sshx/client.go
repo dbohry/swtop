@@ -1,0 +1,195 @@
+// Package sshx provides a small, reconnecting SSH command runner used to
+// poll remote swarm nodes for host and Docker stats.
+package sshx
+
+import (
+	"bytes"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
+)
+
+// Config describes how to reach one remote host.
+type Config struct {
+	Host         string
+	Port         int
+	User         string
+	IdentityFile string
+	Timeout      time.Duration
+}
+
+// Client is a lazily-connected, auto-reconnecting SSH session runner.
+// It is safe for concurrent use but commands against the same Client are
+// serialized (each poller owns its own Client, so this only matters for
+// Close/Ensure races).
+type Client struct {
+	cfg        Config
+	mu         sync.Mutex
+	client     *ssh.Client
+	clientCfg  *ssh.ClientConfig
+	clientCfgE error
+}
+
+// New creates a Client. It does not connect until the first Run call.
+func New(cfg Config) *Client {
+	return &Client{cfg: cfg}
+}
+
+func expandHome(path string) string {
+	if path == "" || path[0] != '~' {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, strings.TrimPrefix(path, "~"))
+}
+
+func hostKeyCallback() (ssh.HostKeyCallback, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	known := filepath.Join(home, ".ssh", "known_hosts")
+	if _, err := os.Stat(known); err != nil {
+		return nil, fmt.Errorf("known_hosts not found at %s (connect once with `ssh` manually to trust the host): %w", known, err)
+	}
+	return knownhosts.New(known)
+}
+
+func authMethods(identityFile string) ([]ssh.AuthMethod, error) {
+	var methods []ssh.AuthMethod
+
+	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+		if conn, err := net.Dial("unix", sock); err == nil {
+			methods = append(methods, ssh.PublicKeysCallback(agent.NewClient(conn).Signers))
+		}
+	}
+
+	if identityFile != "" {
+		path := expandHome(identityFile)
+		key, err := os.ReadFile(path)
+		if err != nil {
+			return methods, fmt.Errorf("reading identity file %s: %w", path, err)
+		}
+		signer, err := ssh.ParsePrivateKey(key)
+		if err != nil {
+			return methods, fmt.Errorf("parsing identity file %s: %w", path, err)
+		}
+		methods = append(methods, ssh.PublicKeys(signer))
+	}
+
+	if len(methods) == 0 {
+		return nil, fmt.Errorf("no SSH auth available: set identity_file or run an ssh-agent with SSH_AUTH_SOCK")
+	}
+	return methods, nil
+}
+
+func (c *Client) buildConfig() (*ssh.ClientConfig, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.clientCfg != nil || c.clientCfgE != nil {
+		return c.clientCfg, c.clientCfgE
+	}
+
+	methods, err := authMethods(c.cfg.IdentityFile)
+	if err != nil {
+		c.clientCfgE = err
+		return nil, err
+	}
+	hkcb, err := hostKeyCallback()
+	if err != nil {
+		c.clientCfgE = err
+		return nil, err
+	}
+
+	c.clientCfg = &ssh.ClientConfig{
+		User:            c.cfg.User,
+		Auth:            methods,
+		HostKeyCallback: hkcb,
+		Timeout:         c.cfg.Timeout,
+	}
+	return c.clientCfg, nil
+}
+
+func (c *Client) ensure() (*ssh.Client, error) {
+	c.mu.Lock()
+	existing := c.client
+	c.mu.Unlock()
+	if existing != nil {
+		return existing, nil
+	}
+
+	cfg, err := c.buildConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	addr := net.JoinHostPort(c.cfg.Host, fmt.Sprintf("%d", c.cfg.Port))
+	conn, err := ssh.Dial("tcp", addr, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", addr, err)
+	}
+
+	c.mu.Lock()
+	c.client = conn
+	c.mu.Unlock()
+	return conn, nil
+}
+
+// Run executes cmd on the remote host and returns combined stdout.
+// On any connection-level failure the underlying SSH connection is dropped
+// so the next call reconnects from scratch.
+func (c *Client) Run(cmd string) (string, error) {
+	conn, err := c.ensure()
+	if err != nil {
+		return "", err
+	}
+
+	session, err := conn.NewSession()
+	if err != nil {
+		c.drop()
+		return "", fmt.Errorf("new session: %w", err)
+	}
+	defer session.Close()
+
+	var stdout bytes.Buffer
+	session.Stdout = &stdout
+	if err := session.Run(cmd); err != nil {
+		if _, ok := err.(*ssh.ExitError); !ok {
+			c.drop()
+		}
+		return stdout.String(), err
+	}
+	return stdout.String(), nil
+}
+
+func (c *Client) drop() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client != nil {
+		_ = c.client.Close()
+		c.client = nil
+	}
+}
+
+// Close releases the underlying connection, if any.
+func (c *Client) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client == nil {
+		return nil
+	}
+	err := c.client.Close()
+	c.client = nil
+	return err
+}

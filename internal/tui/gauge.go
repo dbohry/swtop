@@ -1,0 +1,36 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+// bar renders a single-line "label [#####.....] 42.3%  detail" gauge.
+func bar(label string, pct float64, width int, detail string) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	if width < 5 {
+		width = 5
+	}
+
+	filled := int(pct / 100 * float64(width))
+	if filled > width {
+		filled = width
+	}
+	fillStyle := lipgloss.NewStyle().Foreground(gaugeColor(pct))
+	filledStr := fillStyle.Render(strings.Repeat("█", filled))
+	emptyStr := lipgloss.NewStyle().Foreground(colorGray).Render(strings.Repeat("░", width-filled))
+
+	pctStr := fmt.Sprintf("%5.1f%%", pct)
+	line := fmt.Sprintf("%-8s [%s%s] %s", label, filledStr, emptyStr, pctStr)
+	if detail != "" {
+		line += "  " + headerStyle.Render(detail)
+	}
+	return line
+}
