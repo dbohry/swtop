@@ -28,9 +28,8 @@ type Config struct {
 }
 
 // Client is a lazily-connected, auto-reconnecting SSH session runner.
-// A Client is driven by exactly one goroutine at a time (the collector's
-// per-node poller owns it for its whole lifetime), so it needs no internal
-// locking.
+// Driven by exactly one goroutine at a time (the collector's per-node
+// poller owns it for its whole lifetime), so it needs no internal locking.
 type Client struct {
 	cfg    Config
 	client *ssh.Client
@@ -97,15 +96,13 @@ func wrapHostKeyCallback(inner ssh.HostKeyCallback, knownHostsFile string) ssh.H
 }
 
 // recordedHostKeyAlgorithms extracts the key algorithm(s) knownhosts has on
-// record for a host from a "key changed" error, so ensure can retry the
-// dial preferring those algorithms. This matters because our default
-// HostKeyAlgorithms order (ED25519 first, see buildConfig) can pick a
-// different key type than the one actually recorded for a given host, which
-// knownhosts then reports as "changed" even though the real trusted key was
-// never actually compared. Retrying only ever re-runs the same knownhosts
-// check against whatever key gets negotiated, so it cannot weaken
-// verification -- it can only let a genuinely trusted key succeed where the
-// first attempt compared the wrong pair.
+// record for a host from a "key changed" error, so ensure can retry
+// preferring those. Our default HostKeyAlgorithms order (ED25519 first, see
+// buildConfig) can pick a different key type than the one actually recorded
+// for a given host, which knownhosts then reports as "changed" even though
+// the real trusted key was never compared. Retrying only re-runs the same
+// knownhosts check against whatever key gets negotiated, so it can't weaken
+// verification -- it can only fix a false reject.
 func recordedHostKeyAlgorithms(err error) []string {
 	var keyErr *knownhosts.KeyError
 	if !errors.As(err, &keyErr) || len(keyErr.Want) == 0 {
@@ -126,12 +123,12 @@ func recordedHostKeyAlgorithms(err error) []string {
 // authMethods collects every candidate key (from a running SSH agent and/or
 // identity_file) into a single ssh.PublicKeys AuthMethod.
 //
-// This must NOT be split into separate AuthMethod entries per key source:
-// the ssh package's client-side auth loop dedupes config.Auth entries by
-// RFC 4252 method name, so a second "publickey" entry is silently skipped
-// once any earlier "publickey" entry has been tried — even if that earlier
-// one offered zero usable keys (e.g. an agent with no identities loaded).
-// That would make the identity_file key never get attempted at all.
+// Must NOT be split into separate AuthMethod entries per key source: the
+// ssh package's auth loop dedupes config.Auth entries by RFC 4252 method
+// name, so a second "publickey" entry is silently skipped once an earlier
+// one has been tried -- even if that one offered zero usable keys (e.g. an
+// agent with no identities loaded), which would make identity_file's key
+// never get attempted at all.
 func authMethods(identityFile string) ([]ssh.AuthMethod, error) {
 	var signers []ssh.Signer
 

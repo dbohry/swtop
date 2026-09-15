@@ -46,14 +46,12 @@ func layoutTestSnapshot(numCores, numContainers int) model.ClusterSnapshot {
 	return model.ClusterSnapshot{UpdatedAt: time.Now(), Nodes: nodes}
 }
 
-// TestLayoutFitsTerminal is a regression test for a real, hard-to-spot bug
-// class: a single line (header text, footer, a table row) wider than the
-// terminal doesn't just clip in a real terminal -- it auto-wraps onto an
-// extra physical row that the height budget never accounted for, which can
-// push the entire pinned header off the top of the visible screen. It must
-// be checked by actually driving Update()/View() (not by constructing a
-// Model literal), since the bug here was specifically in how layout()
-// composes header + viewport + footer during that real message flow.
+// TestLayoutFitsTerminal guards against a line wider than the terminal
+// auto-wrapping in a real terminal and throwing off the height budget,
+// which can push the pinned header off the top of the screen. Must drive
+// Update()/View() rather than construct a Model literal: the bug this
+// caught was specifically in how layout() composes header + viewport +
+// footer during the real message flow.
 func TestLayoutFitsTerminal(t *testing.T) {
 	sizes := []struct{ w, h int }{
 		{120, 40}, {100, 30}, {80, 24}, {60, 20}, {40, 15},

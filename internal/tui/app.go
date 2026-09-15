@@ -37,9 +37,7 @@ type Model struct {
 
 	width, height int
 
-	// viewport scrolls the tables (Nodes/Services on the cluster view,
-	// Containers on a node view) when they don't fit the terminal height;
-	// everything else (gauges, tabs, footer) stays pinned.
+	// viewport scrolls the tables; gauges, tabs, and footer stay pinned.
 	viewport viewport.Model
 }
 
@@ -104,11 +102,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// syncViewport resizes the viewport to fit around the current header/footer
-// and refreshes its content. Content changes (a new snapshot, a sort
-// toggle) always need this; it's cheap enough to just do unconditionally
-// after every message. SetContent preserves the current scroll offset, so
-// this never disturbs an in-progress scroll.
+// syncViewport resizes the viewport around the current header/footer and
+// refreshes its content. Cheap enough to just run after every message;
+// SetContent preserves the scroll offset, so this never disrupts scrolling.
 func (m *Model) syncViewport() {
 	header, body, footerLines := m.layout()
 
@@ -143,15 +139,6 @@ func (m Model) effectiveWidth() int {
 // layout renders the pinned header (tabs plus gauges/summary) and the
 // scrollable body (the tables) for the current state, plus how many lines
 // the footer occupies. header always ends with a trailing newline.
-//
-// Every header line is clamped to the terminal width as a safety net: a
-// line built from a fixed-length format string (the footer, the net/load
-// line) or from content whose length isn't fully budgeted for (detail text
-// next to a gauge) can end up wider than the terminal despite the
-// responsive sizing elsewhere. In a real terminal that overflow doesn't
-// just clip -- it auto-wraps onto an extra physical row that this layout's
-// line-count-based height budget never accounted for, pushing everything
-// below it (in the worst case, the whole header) off the visible screen.
 func (m Model) layout() (header, body string, footerLines int) {
 	width := m.effectiveWidth()
 
@@ -168,9 +155,8 @@ func (m Model) layout() (header, body string, footerLines int) {
 	}
 	header = clampLines(header, width)
 
-	// Reserve room for the scrollable body and the footer even when the
-	// header's own content (e.g. many per-core CPU rows on a narrow
-	// terminal) would otherwise be taller than the whole terminal.
+	// Reserve room for the body and footer even if the header's own content
+	// (e.g. many per-core CPU rows) is taller than the whole terminal.
 	footerLines = 1
 	if maxHeaderLines := m.height - minViewportHeight - footerLines; maxHeaderLines > 0 {
 		header = capLines(header, maxHeaderLines)
@@ -179,12 +165,11 @@ func (m Model) layout() (header, body string, footerLines int) {
 	return header, body, footerLines
 }
 
-// capLines keeps at most the first maxLines lines of s. header always ends
-// with a trailing newline; when actually truncating, that invariant has to
-// be re-added explicitly, since slicing off the rest of the lines slices
-// off the empty trailing element a trailing "\n" produces too. Without it,
-// the caller's header+viewport concatenation would merge the last kept
-// header line directly into the viewport's first line.
+// capLines keeps at most the first maxLines lines of s, re-adding the
+// trailing "\n" when it actually truncates (slicing off the rest of the
+// lines also slices off the empty element that "\n" produces -- without
+// re-adding it, header+viewport concatenation would merge the last kept
+// header line directly into the viewport's first line).
 func capLines(s string, maxLines int) string {
 	lines := strings.Split(s, "\n")
 	if len(lines) <= maxLines {
@@ -343,7 +328,6 @@ func (m Model) renderNodeHeader(n model.NodeSnapshot) string {
 
 	barWidth := clampBarWidth(m.width, 3, 20, 24, 8, 30)
 
-	// Per-core CPU bars, wrapped so each row fits the terminal width.
 	perRow := coresPerRow(m.effectiveWidth(), barWidth)
 	for i := 0; i < len(n.Host.PerCoreCPU); i += perRow {
 		end := i + perRow
@@ -437,8 +421,7 @@ func totalCores(c model.ClusterSnapshot) int {
 }
 
 // clampBarWidth derives a gauge width from the terminal width, falling back
-// to def before the first WindowSizeMsg (screenWidth == 0) and otherwise
-// clamping screenWidth/divisor-offset to [min, max].
+// to def before the first WindowSizeMsg (screenWidth == 0).
 func clampBarWidth(screenWidth, divisor, offset, def, min, max int) int {
 	if screenWidth <= 0 {
 		return def
@@ -472,17 +455,16 @@ func coresPerRow(width, barWidth int) int {
 	return n
 }
 
-// clampLines truncates each line of s to width, so a line that's wider than
-// the terminal (whether from an under-budgeted format string or content
-// whose length isn't accounted for) can never auto-wrap in the real
-// terminal and throw off the height layout. ANSI styling is preserved.
+// clampLines truncates each line of s to width, so a line wider than the
+// terminal (an under-budgeted format string, or content whose length isn't
+// accounted for) can never auto-wrap in a real terminal and throw off the
+// height layout. ANSI styling is preserved.
 //
-// Lines are clamped one at a time rather than handing the whole multi-line
-// string to a single lipgloss Style.Render() call: lipgloss treats a
-// trailing "\n" as introducing an extra (empty) line and, with no explicit
-// Width set, pads every line out to the width of the widest one -- both of
-// which corrupt a header string's line structure instead of just capping
-// long lines.
+// Lines are clamped one at a time rather than handing lipgloss the whole
+// multi-line string: Style.Render() treats a trailing "\n" as an extra
+// empty line and, with no explicit Width set, pads every line to the width
+// of the widest one -- corrupting the line structure instead of just
+// capping long lines.
 func clampLines(s string, width int) string {
 	if width <= 0 {
 		return s
