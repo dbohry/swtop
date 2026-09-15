@@ -1,7 +1,3 @@
-// Command swtop is a btop/htop-style terminal UI for a Docker Swarm
-// cluster: it SSHes into every configured node, collects host and Docker
-// container stats, and renders both a consolidated cluster-wide view and
-// per-node detail views.
 package main
 
 import (

@@ -1,13 +1,10 @@
-// Package model defines the data shapes shared between the collector and
-// the TUI: per-node host stats, containers, and cluster-wide aggregates.
 package model
 
 import "time"
 
-// HostStats is point-in-time (or rate-based) resource usage for one machine.
 type HostStats struct {
-	CPUPercent float64   // 0-100, averaged across cores
-	PerCoreCPU []float64 // 0-100 per core
+	CPUPercent float64
+	PerCoreCPU []float64
 
 	MemTotalKB uint64
 	MemUsedKB  uint64
@@ -28,8 +25,6 @@ type HostStats struct {
 	Uptime time.Duration
 }
 
-// Add accumulates another HostStats into a running cluster-wide total.
-// CPUPercent/PerCoreCPU are intentionally left to the caller to average.
 func (h *HostStats) Add(o HostStats) {
 	h.MemTotalKB += o.MemTotalKB
 	h.MemUsedKB += o.MemUsedKB
@@ -44,15 +39,13 @@ func (h *HostStats) Add(o HostStats) {
 	h.Load15 += o.Load15
 }
 
-// Container is one Docker container's live resource usage, as reported by
-// the local Docker engine on the node it runs on.
 type Container struct {
 	ID          string
 	Name        string
 	Image       string
-	ServiceName string // from com.docker.swarm.service.name label, if any
+	ServiceName string
 	Status      string
-	Node        string // set by the collector, not the remote command
+	Node        string
 
 	CPUPercent float64
 
@@ -68,7 +61,6 @@ type Container struct {
 	PIDs int
 }
 
-// NodeSnapshot is the latest known state of one swarm node.
 type NodeSnapshot struct {
 	Name    string
 	Address string
@@ -83,13 +75,11 @@ type NodeSnapshot struct {
 	UpdatedAt time.Time
 }
 
-// ClusterSnapshot is the latest known state of every configured node.
 type ClusterSnapshot struct {
 	Nodes     []NodeSnapshot
 	UpdatedAt time.Time
 }
 
-// OnlineCount returns how many nodes are currently reachable.
 func (c ClusterSnapshot) OnlineCount() int {
 	n := 0
 	for _, node := range c.Nodes {
@@ -100,8 +90,6 @@ func (c ClusterSnapshot) OnlineCount() int {
 	return n
 }
 
-// Aggregate sums/averages host stats across all online nodes, as if the
-// whole cluster were one machine.
 func (c ClusterSnapshot) Aggregate() HostStats {
 	var agg HostStats
 	var online, totalCores, totalBusy float64
@@ -120,9 +108,6 @@ func (c ClusterSnapshot) Aggregate() HostStats {
 		return agg
 	}
 
-	// CPUPercent is the utilization-weighted-by-core-count average, i.e.
-	// total busy "core-percent" divided by total cores, matching how a
-	// single machine's overall CPU% behaves.
 	if totalCores > 0 {
 		agg.CPUPercent = totalBusy / totalCores * 100
 	}
@@ -134,8 +119,6 @@ func (c ClusterSnapshot) Aggregate() HostStats {
 	return agg
 }
 
-// ServiceAggregate is per-service resource usage summed across every task
-// (container) of that service, cluster-wide.
 type ServiceAggregate struct {
 	Name          string
 	Replicas      int
@@ -144,7 +127,6 @@ type ServiceAggregate struct {
 	MemUsageBytes uint64
 }
 
-// ServiceAggregates groups all containers cluster-wide by service name.
 func (c ClusterSnapshot) ServiceAggregates() []ServiceAggregate {
 	byName := map[string]*ServiceAggregate{}
 	var order []string

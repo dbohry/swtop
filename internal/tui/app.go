@@ -1,6 +1,3 @@
-// Package tui implements the swtop terminal UI: a consolidated
-// cluster-wide view (the whole swarm as one machine) plus one detail view
-// per node, navigated like tabs.
 package tui
 
 import (
@@ -16,34 +13,24 @@ import (
 	"github.com/dbohry/swtop/internal/model"
 )
 
-// defaultWidth is used to size gauges/tables before the first
-// tea.WindowSizeMsg arrives (briefly, at startup).
 const defaultWidth = 80
 
-// minViewportHeight is the smallest the scrollable body is ever sized to,
-// even if the pinned header's natural content (e.g. many per-core CPU rows
-// on a narrow terminal) would otherwise leave no room for it.
 const minViewportHeight = 3
 
 type snapshotMsg model.ClusterSnapshot
 
-// Model is the bubbletea model driving the whole TUI.
 type Model struct {
 	snapshots <-chan model.ClusterSnapshot
 	cluster   model.ClusterSnapshot
 
-	activeTab int // 0 = cluster (consolidated) view, 1..N = node index+1
+	activeTab int
 	sortByMem bool
 
 	width, height int
 
-	// viewport scrolls the tables (Nodes/Services on the cluster view,
-	// Containers on a node view) when they don't fit the terminal height;
-	// everything else (gauges, tabs, footer) stays pinned.
 	viewport viewport.Model
 }
 
-// New builds a Model that reads cluster snapshots from ch.
 func New(ch <-chan model.ClusterSnapshot) Model {
 	return Model{snapshots: ch}
 }
@@ -93,8 +80,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTab = n
 				m.viewport.GotoTop()
 			} else {
-				// Not one of ours (e.g. up/down/pgup/pgdown) -- let the
-				// viewport handle scrolling.
 				m.viewport, cmd = m.viewport.Update(msg)
 			}
 		}
@@ -104,11 +89,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// syncViewport resizes the viewport to fit around the current header/footer
-// and refreshes its content. Content changes (a new snapshot, a sort
-// toggle) always need this; it's cheap enough to just do unconditionally
-// after every message. SetContent preserves the current scroll offset, so
-// this never disturbs an in-progress scroll.
 func (m *Model) syncViewport() {
 	header, body, footerLines := m.layout()
 
@@ -131,8 +111,6 @@ func (m Model) View() string {
 	return header + m.viewport.View() + "\n" + m.renderFooter()
 }
 
-// effectiveWidth is the terminal width to lay out against, substituting
-// defaultWidth before the first WindowSizeMsg arrives (m.width == 0).
 func (m Model) effectiveWidth() int {
 	if m.width > 0 {
 		return m.width
@@ -140,18 +118,6 @@ func (m Model) effectiveWidth() int {
 	return defaultWidth
 }
 
-// layout renders the pinned header (tabs plus gauges/summary) and the
-// scrollable body (the tables) for the current state, plus how many lines
-// the footer occupies. header always ends with a trailing newline.
-//
-// Every header line is clamped to the terminal width as a safety net: a
-// line built from a fixed-length format string (the footer, the net/load
-// line) or from content whose length isn't fully budgeted for (detail text
-// next to a gauge) can end up wider than the terminal despite the
-// responsive sizing elsewhere. In a real terminal that overflow doesn't
-// just clip -- it auto-wraps onto an extra physical row that this layout's
-// line-count-based height budget never accounted for, pushing everything
-// below it (in the worst case, the whole header) off the visible screen.
 func (m Model) layout() (header, body string, footerLines int) {
 	width := m.effectiveWidth()
 
@@ -168,9 +134,6 @@ func (m Model) layout() (header, body string, footerLines int) {
 	}
 	header = clampLines(header, width)
 
-	// Reserve room for the scrollable body and the footer even when the
-	// header's own content (e.g. many per-core CPU rows on a narrow
-	// terminal) would otherwise be taller than the whole terminal.
 	footerLines = 1
 	if maxHeaderLines := m.height - minViewportHeight - footerLines; maxHeaderLines > 0 {
 		header = capLines(header, maxHeaderLines)
@@ -179,12 +142,6 @@ func (m Model) layout() (header, body string, footerLines int) {
 	return header, body, footerLines
 }
 
-// capLines keeps at most the first maxLines lines of s. header always ends
-// with a trailing newline; when actually truncating, that invariant has to
-// be re-added explicitly, since slicing off the rest of the lines slices
-// off the empty trailing element a trailing "\n" produces too. Without it,
-// the caller's header+viewport concatenation would merge the last kept
-// header line directly into the viewport's first line.
 func capLines(s string, maxLines int) string {
 	lines := strings.Split(s, "\n")
 	if len(lines) <= maxLines {
@@ -229,9 +186,6 @@ func (m Model) renderTabs() string {
 	return title + sub + "\n" + strings.Join(parts, " ")
 }
 
-// renderClusterHeader is the pinned part of the cluster view: the
-// consolidated gauges. The Nodes/Services tables scroll separately, in
-// renderClusterBody.
 func (m Model) renderClusterHeader() string {
 	var b strings.Builder
 	agg := m.cluster.Aggregate()
@@ -319,9 +273,6 @@ func (m Model) renderClusterBody() string {
 	return b.String()
 }
 
-// renderNodeHeader is the pinned part of a node view: the title line plus,
-// for an online node, its gauges. For an offline node there's nothing
-// scrollable below it, so layout skips renderNodeBody in that case.
 func (m Model) renderNodeHeader(n model.NodeSnapshot) string {
 	var b strings.Builder
 
@@ -343,7 +294,6 @@ func (m Model) renderNodeHeader(n model.NodeSnapshot) string {
 
 	barWidth := clampBarWidth(m.width, 3, 20, 24, 8, 30)
 
-	// Per-core CPU bars, wrapped so each row fits the terminal width.
 	perRow := coresPerRow(m.effectiveWidth(), barWidth)
 	for i := 0; i < len(n.Host.PerCoreCPU); i += perRow {
 		end := i + perRow
@@ -436,9 +386,6 @@ func totalCores(c model.ClusterSnapshot) int {
 	return n
 }
 
-// clampBarWidth derives a gauge width from the terminal width, falling back
-// to def before the first WindowSizeMsg (screenWidth == 0) and otherwise
-// clamping screenWidth/divisor-offset to [min, max].
 func clampBarWidth(screenWidth, divisor, offset, def, min, max int) int {
 	if screenWidth <= 0 {
 		return def
@@ -458,10 +405,6 @@ func netLoadLine(h model.HostStats) string {
 		"Net", humanizeRate(h.NetRxBytesPerSec), humanizeRate(h.NetTxBytesPerSec), h.Load1, h.Load5, h.Load15)
 }
 
-// coresPerRow returns how many per-core gauges (see bar(), called with no
-// detail text) fit on one row of the given width without wrapping.
-// "%-8s [<barWidth>] <pct>" is 18 columns of overhead around the bar itself
-// (label, brackets, spacing, percentage), and cells are joined by colGap.
 func coresPerRow(width, barWidth int) int {
 	const overhead = 18
 	cellWidth := barWidth + overhead
@@ -472,17 +415,6 @@ func coresPerRow(width, barWidth int) int {
 	return n
 }
 
-// clampLines truncates each line of s to width, so a line that's wider than
-// the terminal (whether from an under-budgeted format string or content
-// whose length isn't accounted for) can never auto-wrap in the real
-// terminal and throw off the height layout. ANSI styling is preserved.
-//
-// Lines are clamped one at a time rather than handing the whole multi-line
-// string to a single lipgloss Style.Render() call: lipgloss treats a
-// trailing "\n" as introducing an extra (empty) line and, with no explicit
-// Width set, pads every line out to the width of the widest one -- both of
-// which corrupt a header string's line structure instead of just capping
-// long lines.
 func clampLines(s string, width int) string {
 	if width <= 0 {
 		return s

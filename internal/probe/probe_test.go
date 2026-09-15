@@ -7,8 +7,6 @@ import (
 )
 
 func sampleOutput(cpuTotal, cpuIdle uint64, rx, tx uint64) string {
-	// A single aggregate "cpu" line plus one core; enough fields for parseCPU
-	// (user nice system idle iowait irq softirq steal).
 	other := cpuTotal - cpuIdle
 	cpuLine := "cpu  " + itoa(other) + " 0 0 " + itoa(cpuIdle) + " 0 0 0 0"
 	core0 := "cpu0 " + itoa(other) + " 0 0 " + itoa(cpuIdle) + " 0 0 0 0"
@@ -100,7 +98,7 @@ func TestParseSecondSampleComputesDeltas(t *testing.T) {
 	_, _, prevSample := Parse(first, nil)
 	prevSample.Timestamp = time.Now().Add(-2 * time.Second)
 
-	second := sampleOutput(3000, 1000, 1_500_000, 2_400_000) // +2000 total, +500 idle -> 75% busy
+	second := sampleOutput(3000, 1000, 1_500_000, 2_400_000)
 	host, _, sample := Parse(second, &prevSample)
 
 	if host.CPUPercent < 74 || host.CPUPercent > 76 {

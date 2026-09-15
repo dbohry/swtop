@@ -1,5 +1,3 @@
-// Package collector polls every configured swarm node over SSH on a fixed
-// interval and publishes cluster-wide snapshots.
 package collector
 
 import (
@@ -12,8 +10,6 @@ import (
 	"github.com/dbohry/swtop/internal/sshx"
 )
 
-// Collector owns one poller goroutine per node and fans results into a
-// shared snapshot, published on Snapshots() after every poll round.
 type Collector struct {
 	interval time.Duration
 	nodes    []config.NodeConfig
@@ -24,7 +20,6 @@ type Collector struct {
 	out chan model.ClusterSnapshot
 }
 
-// New builds a Collector for the given config. Call Run to start polling.
 func New(cfg *config.Config) *Collector {
 	state := make(map[string]model.NodeSnapshot, len(cfg.Nodes))
 	for _, n := range cfg.Nodes {
@@ -38,11 +33,8 @@ func New(cfg *config.Config) *Collector {
 	}
 }
 
-// Snapshots returns the channel new cluster snapshots are published on.
-// The channel is never closed.
 func (c *Collector) Snapshots() <-chan model.ClusterSnapshot { return c.out }
 
-// Run starts one polling goroutine per node and blocks until stop is closed.
 func (c *Collector) Run(stop <-chan struct{}) {
 	var wg sync.WaitGroup
 	for _, n := range c.nodes {
@@ -52,7 +44,7 @@ func (c *Collector) Run(stop <-chan struct{}) {
 			c.pollNode(n, stop)
 		}(n)
 	}
-	c.publish() // emit the initial (all-offline) state immediately
+	c.publish()
 	wg.Wait()
 }
 
@@ -110,8 +102,6 @@ func (c *Collector) runOnce(n config.NodeConfig, client *sshx.Client, prev **pro
 	c.publish()
 }
 
-// publish rebuilds a ClusterSnapshot from current state and pushes it,
-// dropping the previous unread snapshot if the reader hasn't kept up.
 func (c *Collector) publish() {
 	c.mu.Lock()
 	nodes := make([]model.NodeSnapshot, 0, len(c.nodes))

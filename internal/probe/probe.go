@@ -1,9 +1,3 @@
-// Package probe builds the remote shell script swtop runs on each node and
-// parses its output into model.HostStats and model.Container values.
-//
-// Everything is read from /proc so no extra tooling is required on the
-// remote host beyond a POSIX shell, coreutils (df) and, for container
-// stats, the Docker CLI talking to the local engine.
 package probe
 
 import (
@@ -16,7 +10,6 @@ import (
 	"github.com/dbohry/swtop/internal/model"
 )
 
-// Script is executed via a single SSH exec per poll, keeping round trips low.
 const Script = `
 echo '@@CPU'
 cat /proc/stat 2>/dev/null
@@ -41,8 +34,6 @@ type cpuCounters struct {
 	idle  uint64
 }
 
-// Sample is the raw cumulative-counter state from one poll, kept around so
-// the next poll can compute CPU% and network throughput as deltas.
 type Sample struct {
 	Timestamp time.Time
 	CPUAll    cpuCounters
@@ -70,8 +61,6 @@ func splitSections(output string) sections {
 
 	var cur *[]string
 	scanner := bufio.NewScanner(strings.NewReader(output))
-	// Script output is a few KB; let the buffer grow lazily instead of
-	// pre-allocating 1MB on every poll of every node.
 	scanner.Buffer(nil, 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -111,7 +100,7 @@ func parseCPU(lines []string) (cpuCounters, []cpuCounters) {
 		}
 		idle := nums[3]
 		if len(nums) > 4 {
-			idle += nums[4] // + iowait
+			idle += nums[4]
 		}
 		c := cpuCounters{total: total, idle: idle}
 		if fields[0] == "cpu" {
@@ -254,7 +243,6 @@ func parsePercent(s string) float64 {
 	return v
 }
 
-// parseSize parses docker's human sizes like "1.5MiB", "512B", "2.3GB".
 func parseSize(s string) uint64 {
 	s = strings.TrimSpace(s)
 	if s == "" || s == "--" {
@@ -294,7 +282,6 @@ func parseSize(s string) uint64 {
 	return uint64(val * mult)
 }
 
-// parseIOPair parses docker's "1.2MB / 3.4MB" style fields.
 func parseIOPair(s string) (a, b uint64) {
 	parts := strings.SplitN(s, "/", 2)
 	if len(parts) != 2 {
@@ -381,9 +368,6 @@ func cpuPercentFromDelta(prev, cur cpuCounters) float64 {
 	return pct
 }
 
-// Parse turns one poll's raw script output into host stats and container
-// stats. prev is the previous poll's Sample for this same node (nil on the
-// first poll, in which case CPU% and network throughput read as zero).
 func Parse(output string, prev *Sample) (model.HostStats, []model.Container, Sample) {
 	s := splitSections(output)
 
