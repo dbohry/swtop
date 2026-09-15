@@ -4,6 +4,7 @@ package sshx
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -63,7 +64,39 @@ func hostKeyCallback() (ssh.HostKeyCallback, error) {
 	if _, err := os.Stat(known); err != nil {
 		return nil, fmt.Errorf("known_hosts not found at %s (connect once with `ssh` manually to trust the host): %w", known, err)
 	}
-	return knownhosts.New(known)
+	cb, err := knownhosts.New(known)
+	if err != nil {
+		return nil, err
+	}
+	return wrapHostKeyCallback(cb, known), nil
+}
+
+// wrapHostKeyCallback turns knownhosts' terse errors into actionable ones:
+// a changed key (possible MITM, or the host was reinstalled/reassigned)
+// gets different guidance than a host that was simply never trusted.
+func wrapHostKeyCallback(inner ssh.HostKeyCallback, knownHostsFile string) ssh.HostKeyCallback {
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := inner(hostname, remote, key)
+		if err == nil {
+			return nil
+		}
+		var keyErr *knownhosts.KeyError
+		if !errors.As(err, &keyErr) {
+			return err
+		}
+		if len(keyErr.Want) == 0 {
+			return fmt.Errorf(
+				"host %s is not yet trusted in %s — run `ssh %s` once, verify the fingerprint, and accept it, then retry: %w",
+				hostname, knownHostsFile, hostname, err)
+		}
+		return fmt.Errorf(
+			"host key for %s has CHANGED since it was last trusted (previously recorded at %s) — this can "+
+				"mean the host was reinstalled or its IP was reassigned to a different machine, or it can mean "+
+				"a man-in-the-middle attack. Verify the new key's fingerprint with the node's owner/console "+
+				"first; if it's expected, remove the stale entry (`ssh-keygen -R %s -f %s`) and run `ssh %s` "+
+				"once to accept and trust the new key, then retry: %w",
+			hostname, keyErr.Want[0].String(), hostname, knownHostsFile, hostname, err)
+	}
 }
 
 func authMethods(identityFile string) ([]ssh.AuthMethod, error) {
