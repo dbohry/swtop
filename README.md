@@ -100,6 +100,7 @@ location.
 | `tab` / `→` / `l`    | Next view (Cluster → node 1 → node 2 …) |
 | `shift+tab` / `←` / `h` | Previous view                        |
 | `0`-`9`              | Jump directly to Cluster (`0`) or node N |
+| `↑`/`↓`, `pgup`/`pgdn` | Scroll the tables when they don't fit the terminal |
 | `s`                  | Toggle table sort between CPU% and memory |
 | `q` / `ctrl+c`       | Quit                                     |
 
