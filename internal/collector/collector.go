@@ -21,13 +21,17 @@ type Collector struct {
 }
 
 func New(cfg *config.Config) *Collector {
-	state := make(map[string]model.NodeSnapshot, len(cfg.Nodes))
-	for _, n := range cfg.Nodes {
-		state[n.Name] = model.NodeSnapshot{Name: n.Name, Address: n.Address, Role: n.Role}
+	nodes := make([]config.NodeConfig, 0, len(cfg.Nodes)+len(cfg.Servers))
+	nodes = append(nodes, cfg.Nodes...)
+	nodes = append(nodes, cfg.Servers...)
+
+	state := make(map[string]model.NodeSnapshot, len(nodes))
+	for _, n := range nodes {
+		state[n.Name] = model.NodeSnapshot{Name: n.Name, Address: n.Address, Role: n.Role, Docker: n.Docker}
 	}
 	return &Collector{
 		interval: cfg.PollInterval.AsDuration(),
-		nodes:    cfg.Nodes,
+		nodes:    nodes,
 		state:    state,
 		out:      make(chan model.ClusterSnapshot, 1),
 	}
@@ -74,11 +78,15 @@ func (c *Collector) pollNode(n config.NodeConfig, stop <-chan struct{}) {
 }
 
 func (c *Collector) runOnce(n config.NodeConfig, client *sshx.Client, prev **probe.Sample) {
-	output, err := client.Run(probe.Script)
+	script := probe.ServerScript
+	if n.Docker {
+		script = probe.Script
+	}
+	output, err := client.Run(script)
 	if err != nil {
 		c.mu.Lock()
 		c.state[n.Name] = model.NodeSnapshot{
-			Name: n.Name, Address: n.Address, Role: n.Role,
+			Name: n.Name, Address: n.Address, Role: n.Role, Docker: n.Docker,
 			Online: false, Err: err.Error(), UpdatedAt: time.Now(),
 		}
 		c.mu.Unlock()
@@ -87,7 +95,7 @@ func (c *Collector) runOnce(n config.NodeConfig, client *sshx.Client, prev **pro
 		return
 	}
 
-	host, containers, sample := probe.Parse(output, *prev)
+	host, containers, processes, sample := probe.Parse(output, *prev)
 	*prev = &sample
 	for i := range containers {
 		containers[i].Node = n.Name
@@ -95,8 +103,8 @@ func (c *Collector) runOnce(n config.NodeConfig, client *sshx.Client, prev **pro
 
 	c.mu.Lock()
 	c.state[n.Name] = model.NodeSnapshot{
-		Name: n.Name, Address: n.Address, Role: n.Role,
-		Online: true, Host: host, Containers: containers, UpdatedAt: time.Now(),
+		Name: n.Name, Address: n.Address, Role: n.Role, Docker: n.Docker,
+		Online: true, Host: host, Containers: containers, Processes: processes, UpdatedAt: time.Now(),
 	}
 	c.mu.Unlock()
 	c.publish()

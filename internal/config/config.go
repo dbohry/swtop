@@ -39,12 +39,15 @@ type NodeConfig struct {
 	User         string `yaml:"user"`
 	IdentityFile string `yaml:"identity_file"`
 	Port         int    `yaml:"port"`
+
+	Docker bool `yaml:"-"`
 }
 
 type Config struct {
 	PollInterval Duration     `yaml:"poll_interval"`
 	SSH          SSHDefaults  `yaml:"ssh"`
 	Nodes        []NodeConfig `yaml:"nodes"`
+	Servers      []NodeConfig `yaml:"servers"`
 }
 
 func defaults() Config {
@@ -69,27 +72,26 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
-	if len(cfg.Nodes) == 0 {
-		return nil, fmt.Errorf("config must define at least one node under 'nodes'")
+	if len(cfg.Nodes) == 0 && len(cfg.Servers) == 0 {
+		return nil, fmt.Errorf("config must define at least one host under 'nodes' or 'servers'")
 	}
 
-	for i := range cfg.Nodes {
-		n := &cfg.Nodes[i]
-		if n.Name == "" {
-			n.Name = n.Address
+	if err := applyDefaults(cfg.Nodes, cfg.SSH, true); err != nil {
+		return nil, err
+	}
+	if err := applyDefaults(cfg.Servers, cfg.SSH, false); err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool, len(cfg.Nodes)+len(cfg.Servers))
+	for _, n := range cfg.Nodes {
+		seen[n.Name] = true
+	}
+	for _, n := range cfg.Servers {
+		if seen[n.Name] {
+			return nil, fmt.Errorf("duplicate host name %q across 'nodes'/'servers'", n.Name)
 		}
-		if n.Address == "" {
-			return nil, fmt.Errorf("node %q is missing an address", n.Name)
-		}
-		if n.User == "" {
-			n.User = cfg.SSH.User
-		}
-		if n.Port == 0 {
-			n.Port = cfg.SSH.Port
-		}
-		if n.IdentityFile == "" {
-			n.IdentityFile = cfg.SSH.IdentityFile
-		}
+		seen[n.Name] = true
 	}
 
 	if cfg.PollInterval.AsDuration() <= 0 {
@@ -97,4 +99,27 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func applyDefaults(nodes []NodeConfig, ssh SSHDefaults, docker bool) error {
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Name == "" {
+			n.Name = n.Address
+		}
+		if n.Address == "" {
+			return fmt.Errorf("host %q is missing an address", n.Name)
+		}
+		if n.User == "" {
+			n.User = ssh.User
+		}
+		if n.Port == 0 {
+			n.Port = ssh.Port
+		}
+		if n.IdentityFile == "" {
+			n.IdentityFile = ssh.IdentityFile
+		}
+		n.Docker = docker
+	}
+	return nil
 }

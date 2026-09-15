@@ -61,16 +61,26 @@ type Container struct {
 	PIDs int
 }
 
+type Process struct {
+	PID        int
+	Command    string
+	CPUPercent float64
+	MemPercent float64
+}
+
 type NodeSnapshot struct {
 	Name    string
 	Address string
 	Role    string
+
+	Docker bool
 
 	Online bool
 	Err    string
 
 	Host       HostStats
 	Containers []Container
+	Processes  []Process
 
 	UpdatedAt time.Time
 }

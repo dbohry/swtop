@@ -10,7 +10,7 @@ import (
 	"github.com/dbohry/swtop/internal/model"
 )
 
-const Script = `
+const HostScript = `
 echo '@@CPU'
 cat /proc/stat 2>/dev/null
 echo '@@MEM'
@@ -23,10 +23,18 @@ echo '@@NET'
 cat /proc/net/dev 2>/dev/null
 echo '@@DISK'
 df -kP / 2>/dev/null | tail -n +2
+`
+
+const Script = HostScript + `
 echo '@@DOCKERSTATS'
 docker stats --no-stream --no-trunc --format '{{json .}}' 2>/dev/null
 echo '@@DOCKERPS'
 docker ps --no-trunc --format '{{json .}}' 2>/dev/null
+`
+
+const ServerScript = HostScript + `
+echo '@@PROCESSES'
+ps -eo pid,%cpu,%mem,comm:64 --no-headers --sort=-%cpu 2>/dev/null | head -n 20
 `
 
 type cpuCounters struct {
@@ -43,7 +51,7 @@ type Sample struct {
 }
 
 type sections struct {
-	cpu, mem, load, uptime, net, disk, dockerStats, dockerPS []string
+	cpu, mem, load, uptime, net, disk, dockerStats, dockerPS, processes []string
 }
 
 func splitSections(output string) sections {
@@ -57,6 +65,7 @@ func splitSections(output string) sections {
 		"@@DISK":        &s.disk,
 		"@@DOCKERSTATS": &s.dockerStats,
 		"@@DOCKERPS":    &s.dockerPS,
+		"@@PROCESSES":   &s.processes,
 	}
 
 	var cur *[]string
@@ -352,6 +361,29 @@ func parseContainers(statsLines, psLines []string) []model.Container {
 	return out
 }
 
+func parseProcesses(lines []string) []model.Process {
+	var out []model.Process
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		cpu, _ := strconv.ParseFloat(fields[1], 64)
+		mem, _ := strconv.ParseFloat(fields[2], 64)
+		out = append(out, model.Process{
+			PID:        pid,
+			Command:    strings.Join(fields[3:], " "),
+			CPUPercent: cpu,
+			MemPercent: mem,
+		})
+	}
+	return out
+}
+
 func cpuPercentFromDelta(prev, cur cpuCounters) float64 {
 	totalDelta := int64(cur.total - prev.total)
 	idleDelta := int64(cur.idle - prev.idle)
@@ -368,7 +400,7 @@ func cpuPercentFromDelta(prev, cur cpuCounters) float64 {
 	return pct
 }
 
-func Parse(output string, prev *Sample) (model.HostStats, []model.Container, Sample) {
+func Parse(output string, prev *Sample) (model.HostStats, []model.Container, []model.Process, Sample) {
 	s := splitSections(output)
 
 	cpuAll, cpuCores := parseCPU(s.cpu)
@@ -378,6 +410,7 @@ func Parse(output string, prev *Sample) (model.HostStats, []model.Container, Sam
 	rx, tx := parseNet(s.net)
 	diskTotal, diskUsed := parseDisk(s.disk)
 	containers := parseContainers(s.dockerStats, s.dockerPS)
+	processes := parseProcesses(s.processes)
 
 	now := time.Now()
 	cur := Sample{
@@ -420,5 +453,5 @@ func Parse(output string, prev *Sample) (model.HostStats, []model.Container, Sam
 		}
 	}
 
-	return host, containers, cur
+	return host, containers, processes, cur
 }

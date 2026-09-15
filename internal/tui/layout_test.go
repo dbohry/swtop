@@ -30,7 +30,7 @@ func layoutTestSnapshot(numCores, numContainers int) model.ClusterSnapshot {
 	names := []string{"saturn", "jupiter", "mars"}
 	for i := range nodes {
 		nodes[i] = model.NodeSnapshot{
-			Name: names[i], Address: "10.0.0.1", Role: "worker", Online: true,
+			Name: names[i], Address: "10.0.0.1", Role: "worker", Docker: true, Online: true,
 			Host: model.HostStats{
 				CPUPercent: 42.5, PerCoreCPU: cores,
 				MemTotalKB: 16000000, MemUsedKB: 8000000,
@@ -44,6 +44,64 @@ func layoutTestSnapshot(numCores, numContainers int) model.ClusterSnapshot {
 		}
 	}
 	return model.ClusterSnapshot{UpdatedAt: time.Now(), Nodes: nodes}
+}
+
+func layoutTestServerSnapshot(numCores, numProcesses int) model.ClusterSnapshot {
+	cores := make([]float64, numCores)
+	for i := range cores {
+		cores[i] = float64(i % 100)
+	}
+	processes := make([]model.Process, numProcesses)
+	for i := range processes {
+		processes[i] = model.Process{
+			PID: 1000 + i, Command: fmt.Sprintf("some-long-daemon-name-%02d", i),
+			CPUPercent: float64(i), MemPercent: float64(i) / 2,
+		}
+	}
+	snap := layoutTestSnapshot(numCores, 0)
+	for i := range snap.Nodes {
+		snap.Nodes[i].Docker = false
+		snap.Nodes[i].Containers = nil
+		snap.Nodes[i].Processes = processes
+	}
+	return snap
+}
+
+func TestServerLayoutFitsTerminal(t *testing.T) {
+	sizes := []struct{ w, h int }{
+		{120, 40}, {100, 30}, {80, 24}, {60, 20}, {40, 15},
+	}
+
+	for _, sz := range sizes {
+		snap := layoutTestServerSnapshot(8, 20)
+		tm := tea.Model(New(nil))
+		tm, _ = tm.Update(tea.WindowSizeMsg{Width: sz.w, Height: sz.h})
+		tm, _ = tm.Update(snapshotMsg(snap))
+
+		checkView := func(label, out string) {
+			t.Helper()
+			for i, line := range strings.Split(out, "\n") {
+				if w := lipgloss.Width(line); w > sz.w {
+					t.Errorf("%s: line %d is %d cols wide (terminal is %d): %q", label, i, w, sz.w, line)
+				}
+			}
+			if got := strings.Count(out, "\n") + 1; got != sz.h {
+				t.Errorf("%s: rendered %d lines, want %d (terminal height)", label, got, sz.h)
+			}
+		}
+
+		m := tm.(Model)
+		tm2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+		m2 := tm2.(Model)
+		checkView(fmt.Sprintf("server node w=%d h=%d", sz.w, sz.h), m2.View())
+
+		if !strings.Contains(m2.View(), "Processes (20)") {
+			t.Errorf("expected process panel with 20 entries, got:\n%s", m2.View())
+		}
+		if strings.Contains(m2.View(), "Containers (") {
+			t.Errorf("plain server should not render a Containers panel, got:\n%s", m2.View())
+		}
+	}
 }
 
 func TestLayoutFitsTerminal(t *testing.T) {
