@@ -6,6 +6,10 @@
 
 A `btop`/`htop`-style terminal UI for a Docker Swarm cluster. Connects to every node over SSH and shows a consolidated cluster view plus a per-node view (CPU, memory, disk, network, and containers).
 
+<img width="1258" height="657" alt="Screenshot 2026-09-15 at 15 46 10" src="https://github.com/user-attachments/assets/75fb82d9-9e58-4304-beb2-aadbf708650e" />
+<img width="1261" height="656" alt="Screenshot 2026-09-15 at 15 46 25" src="https://github.com/user-attachments/assets/38f73264-19b6-4ffe-bb15-7d0ad4806aa7" />
+
+
 ## Requirements
 
 **Your machine:**
