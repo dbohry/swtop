@@ -148,7 +148,18 @@ func buildConfig(cfg Config) (*ssh.ClientConfig, error) {
 		User:            cfg.User,
 		Auth:            methods,
 		HostKeyCallback: hkcb,
-		Timeout:         cfg.Timeout,
+		// golang.org/x/crypto/ssh's own default order puts RSA/ECDSA ahead of
+		// ED25519. A server offering multiple host key types (the sshd
+		// default) then negotiates a different key than a real ssh/ssh-keyscan
+		// client would, and knownhosts reports a false "key changed" against
+		// the ED25519 line that's actually recorded. Prefer ED25519 first to
+		// match what ssh_host_*_key setups and modern OpenSSH clients do.
+		HostKeyAlgorithms: []string{
+			ssh.KeyAlgoED25519,
+			ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521,
+			ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSA,
+		},
+		Timeout: cfg.Timeout,
 	}, nil
 }
 
