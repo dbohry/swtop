@@ -14,43 +14,36 @@ type column struct {
 	flexWeight int  // >0 marks this column resizable by fitColumns
 }
 
-// fitColumns resizes flexible columns (flexWeight > 0) so the whole row
-// fits within totalWidth, leaving fixed-width columns alone. Flexible
-// columns share the leftover space proportionally to their weight and never
-// shrink below minFlex. If totalWidth is unknown (<=0) or there are no
-// flexible columns, cols is returned unchanged.
-func fitColumns(cols []column, totalWidth, minFlex int) []column {
+// fitColumns grows flexible columns (flexWeight > 0) to fill any width left
+// over once every column has at least its declared width, sharing the
+// extra proportionally to weight. A column's declared width is always its
+// floor -- it only ever grows, never shrinks. If there's no extra width to
+// give out (totalWidth unknown, or no wider than the columns already need),
+// cols is returned unchanged.
+func fitColumns(cols []column, totalWidth int) []column {
 	if totalWidth <= 0 {
 		return cols
 	}
 
-	fixed, totalWeight, numFlex := 0, 0, 0
+	baseline, totalWeight := 0, 0
 	for _, c := range cols {
-		if c.flexWeight > 0 {
-			totalWeight += c.flexWeight
-			numFlex++
-		} else {
-			fixed += c.width
-		}
+		baseline += c.width
+		totalWeight += c.flexWeight
 	}
 	if totalWeight == 0 {
 		return cols
 	}
 
-	extra := totalWidth - fixed - (len(cols)-1)*colGap
-	if min := minFlex * numFlex; extra < min {
-		extra = min
+	extra := totalWidth - baseline - (len(cols)-1)*colGap
+	if extra <= 0 {
+		return cols
 	}
 
 	out := make([]column, len(cols))
 	copy(out, cols)
 	for i, c := range out {
 		if c.flexWeight > 0 {
-			w := extra * c.flexWeight / totalWeight
-			if w < minFlex {
-				w = minFlex
-			}
-			out[i].width = w
+			out[i].width = c.width + extra*c.flexWeight/totalWeight
 		}
 	}
 	return out

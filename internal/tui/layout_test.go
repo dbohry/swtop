@@ -1,0 +1,90 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/dbohry/swtop/internal/model"
+)
+
+func layoutTestSnapshot(numCores, numContainers int) model.ClusterSnapshot {
+	cores := make([]float64, numCores)
+	for i := range cores {
+		cores[i] = float64(i % 100)
+	}
+	containers := make([]model.Container, numContainers)
+	for i := range containers {
+		containers[i] = model.Container{
+			ID: fmt.Sprintf("c%d", i), Name: fmt.Sprintf("service-%02d.1.xyz", i),
+			ServiceName: fmt.Sprintf("service-%02d", i), Image: "nginx",
+			Status:     "Up 10 days (healthy)",
+			CPUPercent: float64(i), MemUsageBytes: uint64(i) * 1024 * 1024, PIDs: 3,
+		}
+	}
+	nodes := make([]model.NodeSnapshot, 3)
+	names := []string{"saturn", "jupiter", "mars"}
+	for i := range nodes {
+		nodes[i] = model.NodeSnapshot{
+			Name: names[i], Address: "10.0.0.1", Role: "worker", Online: true,
+			Host: model.HostStats{
+				CPUPercent: 42.5, PerCoreCPU: cores,
+				MemTotalKB: 16000000, MemUsedKB: 8000000,
+				DiskTotalKB: 100000000, DiskUsedKB: 40000000,
+				Load1: 0.5, Load5: 0.4, Load15: 0.3,
+				NetRxBytesPerSec: 1024 * 500, NetTxBytesPerSec: 1024 * 200,
+				Uptime: 5 * time.Hour,
+			},
+			Containers: containers,
+			UpdatedAt:  time.Now(),
+		}
+	}
+	return model.ClusterSnapshot{UpdatedAt: time.Now(), Nodes: nodes}
+}
+
+// TestLayoutFitsTerminal is a regression test for a real, hard-to-spot bug
+// class: a single line (header text, footer, a table row) wider than the
+// terminal doesn't just clip in a real terminal -- it auto-wraps onto an
+// extra physical row that the height budget never accounted for, which can
+// push the entire pinned header off the top of the visible screen. It must
+// be checked by actually driving Update()/View() (not by constructing a
+// Model literal), since the bug here was specifically in how layout()
+// composes header + viewport + footer during that real message flow.
+func TestLayoutFitsTerminal(t *testing.T) {
+	sizes := []struct{ w, h int }{
+		{120, 40}, {100, 30}, {80, 24}, {60, 20}, {40, 15},
+	}
+	coreCounts := []int{1, 4, 8, 32}
+
+	for _, sz := range sizes {
+		for _, cores := range coreCounts {
+			snap := layoutTestSnapshot(cores, 10)
+			tm := tea.Model(New(nil))
+			tm, _ = tm.Update(tea.WindowSizeMsg{Width: sz.w, Height: sz.h})
+			tm, _ = tm.Update(snapshotMsg(snap))
+
+			checkView := func(label, out string) {
+				t.Helper()
+				for i, line := range strings.Split(out, "\n") {
+					if w := lipgloss.Width(line); w > sz.w {
+						t.Errorf("%s: line %d is %d cols wide (terminal is %d): %q", label, i, w, sz.w, line)
+					}
+				}
+				if got := strings.Count(out, "\n") + 1; got != sz.h {
+					t.Errorf("%s: rendered %d lines, want %d (terminal height)", label, got, sz.h)
+				}
+			}
+
+			m := tm.(Model)
+			checkView(fmt.Sprintf("cluster w=%d h=%d cores=%d", sz.w, sz.h, cores), m.View())
+
+			tm2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+			m2 := tm2.(Model)
+			checkView(fmt.Sprintf("node w=%d h=%d cores=%d", sz.w, sz.h, cores), m2.View())
+		}
+	}
+}
