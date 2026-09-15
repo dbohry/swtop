@@ -26,9 +26,6 @@ var (
 
 	footerStyle = lipgloss.NewStyle().Foreground(colorGray)
 
-	// Gauge fill styles, precomputed once rather than per bar() call: a bar
-	// is drawn for every core/mem/disk/swap gauge on every render, which
-	// happens on every incoming snapshot.
 	gaugeFillGreenStyle  = lipgloss.NewStyle().Foreground(colorGreen)
 	gaugeFillYellowStyle = lipgloss.NewStyle().Foreground(colorYellow)
 	gaugeFillRedStyle    = lipgloss.NewStyle().Foreground(colorRed)

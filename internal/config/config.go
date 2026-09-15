@@ -1,5 +1,3 @@
-// Package config loads swtop's YAML configuration: SSH defaults and the
-// inventory of swarm nodes to monitor.
 package config
 
 import (
@@ -10,7 +8,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Duration wraps time.Duration so it can be parsed from YAML strings like "2s".
 type Duration time.Duration
 
 func (d Duration) AsDuration() time.Duration { return time.Duration(d) }
@@ -28,7 +25,6 @@ func (d *Duration) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return nil
 }
 
-// SSHDefaults are applied to any node that doesn't override them.
 type SSHDefaults struct {
 	User         string   `yaml:"user"`
 	IdentityFile string   `yaml:"identity_file"`
@@ -36,17 +32,15 @@ type SSHDefaults struct {
 	Timeout      Duration `yaml:"timeout"`
 }
 
-// NodeConfig describes one swarm node reachable over SSH.
 type NodeConfig struct {
 	Name         string `yaml:"name"`
 	Address      string `yaml:"address"`
-	Role         string `yaml:"role"` // "manager" or "worker" (informational only)
+	Role         string `yaml:"role"`
 	User         string `yaml:"user"`
 	IdentityFile string `yaml:"identity_file"`
 	Port         int    `yaml:"port"`
 }
 
-// Config is the root swtop configuration.
 type Config struct {
 	PollInterval Duration     `yaml:"poll_interval"`
 	SSH          SSHDefaults  `yaml:"ssh"`
@@ -64,7 +58,6 @@ func defaults() Config {
 	}
 }
 
-// Load reads and validates a config file from path.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

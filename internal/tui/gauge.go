@@ -5,7 +5,6 @@ import (
 	"strings"
 )
 
-// bar renders a single-line "label [#####.....] 42.3%  detail" gauge.
 func bar(label string, pct float64, width int, detail string) string {
 	if pct < 0 {
 		pct = 0

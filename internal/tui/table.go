@@ -4,22 +4,15 @@ import (
 	"strings"
 )
 
-// colGap is the number of spaces rendered between adjacent columns.
 const colGap = 2
 
 type column struct {
 	title      string
 	width      int
-	right      bool // right-align cell content
-	flexWeight int  // >0 marks this column resizable by fitColumns
+	right      bool
+	flexWeight int
 }
 
-// fitColumns grows flexible columns (flexWeight > 0) to fill any width left
-// over once every column has at least its declared width, sharing the
-// extra proportionally to weight. A column's declared width is always its
-// floor -- it only ever grows, never shrinks. If there's no extra width to
-// give out (totalWidth unknown, or no wider than the columns already need),
-// cols is returned unchanged.
 func fitColumns(cols []column, totalWidth int) []column {
 	if totalWidth <= 0 {
 		return cols

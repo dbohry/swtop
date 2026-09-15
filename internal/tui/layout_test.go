@@ -46,12 +46,6 @@ func layoutTestSnapshot(numCores, numContainers int) model.ClusterSnapshot {
 	return model.ClusterSnapshot{UpdatedAt: time.Now(), Nodes: nodes}
 }
 
-// TestLayoutFitsTerminal guards against a line wider than the terminal
-// auto-wrapping in a real terminal and throwing off the height budget,
-// which can push the pinned header off the top of the screen. Must drive
-// Update()/View() rather than construct a Model literal: the bug this
-// caught was specifically in how layout() composes header + viewport +
-// footer during the real message flow.
 func TestLayoutFitsTerminal(t *testing.T) {
 	sizes := []struct{ w, h int }{
 		{120, 40}, {100, 30}, {80, 24}, {60, 20}, {40, 15},

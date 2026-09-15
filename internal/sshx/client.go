@@ -1,5 +1,3 @@
-// Package sshx provides a small, reconnecting SSH command runner used to
-// poll remote swarm nodes for host and Docker stats.
 package sshx
 
 import (
@@ -18,7 +16,6 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
-// Config describes how to reach one remote host.
 type Config struct {
 	Host         string
 	Port         int
@@ -27,15 +24,11 @@ type Config struct {
 	Timeout      time.Duration
 }
 
-// Client is a lazily-connected, auto-reconnecting SSH session runner.
-// Driven by exactly one goroutine at a time (the collector's per-node
-// poller owns it for its whole lifetime), so it needs no internal locking.
 type Client struct {
 	cfg    Config
 	client *ssh.Client
 }
 
-// New creates a Client. It does not connect until the first Run call.
 func New(cfg Config) *Client {
 	return &Client{cfg: cfg}
 }
@@ -67,9 +60,6 @@ func hostKeyCallback() (ssh.HostKeyCallback, error) {
 	return wrapHostKeyCallback(cb, known), nil
 }
 
-// wrapHostKeyCallback turns knownhosts' terse errors into actionable ones:
-// a changed key (possible MITM, or the host was reinstalled/reassigned)
-// gets different guidance than a host that was simply never trusted.
 func wrapHostKeyCallback(inner ssh.HostKeyCallback, knownHostsFile string) ssh.HostKeyCallback {
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		err := inner(hostname, remote, key)
@@ -95,14 +85,6 @@ func wrapHostKeyCallback(inner ssh.HostKeyCallback, knownHostsFile string) ssh.H
 	}
 }
 
-// recordedHostKeyAlgorithms extracts the key algorithm(s) knownhosts has on
-// record for a host from a "key changed" error, so ensure can retry
-// preferring those. Our default HostKeyAlgorithms order (ED25519 first, see
-// buildConfig) can pick a different key type than the one actually recorded
-// for a given host, which knownhosts then reports as "changed" even though
-// the real trusted key was never compared. Retrying only re-runs the same
-// knownhosts check against whatever key gets negotiated, so it can't weaken
-// verification -- it can only fix a false reject.
 func recordedHostKeyAlgorithms(err error) []string {
 	var keyErr *knownhosts.KeyError
 	if !errors.As(err, &keyErr) || len(keyErr.Want) == 0 {
@@ -120,15 +102,6 @@ func recordedHostKeyAlgorithms(err error) []string {
 	return algos
 }
 
-// authMethods collects every candidate key (from a running SSH agent and/or
-// identity_file) into a single ssh.PublicKeys AuthMethod.
-//
-// Must NOT be split into separate AuthMethod entries per key source: the
-// ssh package's auth loop dedupes config.Auth entries by RFC 4252 method
-// name, so a second "publickey" entry is silently skipped once an earlier
-// one has been tried -- even if that one offered zero usable keys (e.g. an
-// agent with no identities loaded), which would make identity_file's key
-// never get attempted at all.
 func authMethods(identityFile string) ([]ssh.AuthMethod, error) {
 	var signers []ssh.Signer
 
@@ -164,18 +137,12 @@ func authMethods(identityFile string) ([]ssh.AuthMethod, error) {
 	return []ssh.AuthMethod{ssh.PublicKeys(signers...)}, nil
 }
 
-// defaultHostKeyAlgorithms is the fallback preference order for a host with
-// nothing (yet) recorded in known_hosts. golang.org/x/crypto/ssh's own
-// default order puts RSA/ECDSA ahead of ED25519; most modern sshd/ssh
-// clients do the opposite, so match that instead.
 var defaultHostKeyAlgorithms = []string{
 	ssh.KeyAlgoED25519,
 	ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521,
 	ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSA,
 }
 
-// hostKeyAlgorithms puts preferred first (deduplicated), then fills in the
-// rest of defaultHostKeyAlgorithms as a fallback.
 func hostKeyAlgorithms(preferred []string) []string {
 	if len(preferred) == 0 {
 		return defaultHostKeyAlgorithms
@@ -197,10 +164,6 @@ func hostKeyAlgorithms(preferred []string) []string {
 	return algos
 }
 
-// buildConfig assembles a fresh ssh.ClientConfig on every call, re-reading
-// the identity file and ~/.ssh/known_hosts from disk. This is deliberately
-// not cached: it lets a fix to known_hosts (or a rotated key) take effect
-// on the next reconnect attempt without having to restart swtop.
 func buildConfig(cfg Config, preferredHostKeyAlgos []string) (*ssh.ClientConfig, error) {
 	methods, err := authMethods(cfg.IdentityFile)
 	if err != nil {
@@ -241,8 +204,6 @@ func (c *Client) ensure() (*ssh.Client, error) {
 
 	conn, err := c.dial(addr, nil)
 	if err != nil {
-		// See recordedHostKeyAlgorithms: retry once preferring whatever
-		// algorithm(s) are actually on record for this host.
 		if preferred := recordedHostKeyAlgorithms(err); len(preferred) > 0 {
 			if retryConn, retryErr := c.dial(addr, preferred); retryErr == nil {
 				conn, err = retryConn, nil
@@ -257,9 +218,6 @@ func (c *Client) ensure() (*ssh.Client, error) {
 	return conn, nil
 }
 
-// Run executes cmd on the remote host and returns combined stdout.
-// On any connection-level failure the underlying SSH connection is dropped
-// so the next call reconnects from scratch.
 func (c *Client) Run(cmd string) (string, error) {
 	conn, err := c.ensure()
 	if err != nil {
@@ -291,7 +249,6 @@ func (c *Client) drop() {
 	}
 }
 
-// Close releases the underlying connection, if any.
 func (c *Client) Close() error {
 	if c.client == nil {
 		return nil

@@ -1,6 +1,3 @@
-// Package tui implements the swtop terminal UI: a consolidated
-// cluster-wide view (the whole swarm as one machine) plus one detail view
-// per node, navigated like tabs.
 package tui
 
 import (
@@ -16,32 +13,24 @@ import (
 	"github.com/dbohry/swtop/internal/model"
 )
 
-// defaultWidth is used to size gauges/tables before the first
-// tea.WindowSizeMsg arrives (briefly, at startup).
 const defaultWidth = 80
 
-// minViewportHeight is the smallest the scrollable body is ever sized to,
-// even if the pinned header's natural content (e.g. many per-core CPU rows
-// on a narrow terminal) would otherwise leave no room for it.
 const minViewportHeight = 3
 
 type snapshotMsg model.ClusterSnapshot
 
-// Model is the bubbletea model driving the whole TUI.
 type Model struct {
 	snapshots <-chan model.ClusterSnapshot
 	cluster   model.ClusterSnapshot
 
-	activeTab int // 0 = cluster (consolidated) view, 1..N = node index+1
+	activeTab int
 	sortByMem bool
 
 	width, height int
 
-	// viewport scrolls the tables; gauges, tabs, and footer stay pinned.
 	viewport viewport.Model
 }
 
-// New builds a Model that reads cluster snapshots from ch.
 func New(ch <-chan model.ClusterSnapshot) Model {
 	return Model{snapshots: ch}
 }
@@ -91,8 +80,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTab = n
 				m.viewport.GotoTop()
 			} else {
-				// Not one of ours (e.g. up/down/pgup/pgdown) -- let the
-				// viewport handle scrolling.
 				m.viewport, cmd = m.viewport.Update(msg)
 			}
 		}
@@ -102,9 +89,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// syncViewport resizes the viewport around the current header/footer and
-// refreshes its content. Cheap enough to just run after every message;
-// SetContent preserves the scroll offset, so this never disrupts scrolling.
 func (m *Model) syncViewport() {
 	header, body, footerLines := m.layout()
 
@@ -127,8 +111,6 @@ func (m Model) View() string {
 	return header + m.viewport.View() + "\n" + m.renderFooter()
 }
 
-// effectiveWidth is the terminal width to lay out against, substituting
-// defaultWidth before the first WindowSizeMsg arrives (m.width == 0).
 func (m Model) effectiveWidth() int {
 	if m.width > 0 {
 		return m.width
@@ -136,9 +118,6 @@ func (m Model) effectiveWidth() int {
 	return defaultWidth
 }
 
-// layout renders the pinned header (tabs plus gauges/summary) and the
-// scrollable body (the tables) for the current state, plus how many lines
-// the footer occupies. header always ends with a trailing newline.
 func (m Model) layout() (header, body string, footerLines int) {
 	width := m.effectiveWidth()
 
@@ -155,8 +134,6 @@ func (m Model) layout() (header, body string, footerLines int) {
 	}
 	header = clampLines(header, width)
 
-	// Reserve room for the body and footer even if the header's own content
-	// (e.g. many per-core CPU rows) is taller than the whole terminal.
 	footerLines = 1
 	if maxHeaderLines := m.height - minViewportHeight - footerLines; maxHeaderLines > 0 {
 		header = capLines(header, maxHeaderLines)
@@ -165,11 +142,6 @@ func (m Model) layout() (header, body string, footerLines int) {
 	return header, body, footerLines
 }
 
-// capLines keeps at most the first maxLines lines of s, re-adding the
-// trailing "\n" when it actually truncates (slicing off the rest of the
-// lines also slices off the empty element that "\n" produces -- without
-// re-adding it, header+viewport concatenation would merge the last kept
-// header line directly into the viewport's first line).
 func capLines(s string, maxLines int) string {
 	lines := strings.Split(s, "\n")
 	if len(lines) <= maxLines {
@@ -214,9 +186,6 @@ func (m Model) renderTabs() string {
 	return title + sub + "\n" + strings.Join(parts, " ")
 }
 
-// renderClusterHeader is the pinned part of the cluster view: the
-// consolidated gauges. The Nodes/Services tables scroll separately, in
-// renderClusterBody.
 func (m Model) renderClusterHeader() string {
 	var b strings.Builder
 	agg := m.cluster.Aggregate()
@@ -304,9 +273,6 @@ func (m Model) renderClusterBody() string {
 	return b.String()
 }
 
-// renderNodeHeader is the pinned part of a node view: the title line plus,
-// for an online node, its gauges. For an offline node there's nothing
-// scrollable below it, so layout skips renderNodeBody in that case.
 func (m Model) renderNodeHeader(n model.NodeSnapshot) string {
 	var b strings.Builder
 
@@ -420,8 +386,6 @@ func totalCores(c model.ClusterSnapshot) int {
 	return n
 }
 
-// clampBarWidth derives a gauge width from the terminal width, falling back
-// to def before the first WindowSizeMsg (screenWidth == 0).
 func clampBarWidth(screenWidth, divisor, offset, def, min, max int) int {
 	if screenWidth <= 0 {
 		return def
@@ -441,10 +405,6 @@ func netLoadLine(h model.HostStats) string {
 		"Net", humanizeRate(h.NetRxBytesPerSec), humanizeRate(h.NetTxBytesPerSec), h.Load1, h.Load5, h.Load15)
 }
 
-// coresPerRow returns how many per-core gauges (see bar(), called with no
-// detail text) fit on one row of the given width without wrapping.
-// "%-8s [<barWidth>] <pct>" is 18 columns of overhead around the bar itself
-// (label, brackets, spacing, percentage), and cells are joined by colGap.
 func coresPerRow(width, barWidth int) int {
 	const overhead = 18
 	cellWidth := barWidth + overhead
@@ -455,16 +415,6 @@ func coresPerRow(width, barWidth int) int {
 	return n
 }
 
-// clampLines truncates each line of s to width, so a line wider than the
-// terminal (an under-budgeted format string, or content whose length isn't
-// accounted for) can never auto-wrap in a real terminal and throw off the
-// height layout. ANSI styling is preserved.
-//
-// Lines are clamped one at a time rather than handing lipgloss the whole
-// multi-line string: Style.Render() treats a trailing "\n" as an extra
-// empty line and, with no explicit Width set, pads every line to the width
-// of the widest one -- corrupting the line structure instead of just
-// capping long lines.
 func clampLines(s string, width int) string {
 	if width <= 0 {
 		return s
