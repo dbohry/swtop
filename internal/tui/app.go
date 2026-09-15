@@ -187,29 +187,37 @@ func (m Model) renderTabs() string {
 }
 
 func (m Model) renderClusterHeader() string {
-	var b strings.Builder
 	agg := m.cluster.Aggregate()
+	width := m.effectiveWidth()
 
-	barWidth := clampBarWidth(m.width, 2, 20, 30, 10, 40)
+	barWidth := clampBarWidth(width, 2, 20, 30, 10, 40)
 
-	b.WriteString(sectionTitleStyle.Render("Cluster (consolidated as one machine)"))
-	b.WriteString("\n")
-	b.WriteString(bar("CPU", agg.CPUPercent, barWidth, fmt.Sprintf("%d cores", totalCores(m.cluster))))
-	b.WriteString("\n")
-	b.WriteString(bar("Mem", percentOf(agg.MemUsedKB, agg.MemTotalKB), barWidth, fmt.Sprintf("%s / %s", humanizeKB(agg.MemUsedKB), humanizeKB(agg.MemTotalKB))))
-	b.WriteString("\n")
-	b.WriteString(bar("Disk", percentOf(agg.DiskUsedKB, agg.DiskTotalKB), barWidth, fmt.Sprintf("%s / %s", humanizeKB(agg.DiskUsedKB), humanizeKB(agg.DiskTotalKB))))
-	b.WriteString("\n")
-	b.WriteString(netLoadLine(agg))
+	lines := []string{
+		barLabeled("CPU", accentCPU, agg.CPUPercent, barWidth, fmt.Sprintf("%d cores", totalCores(m.cluster))),
+		barLabeled("Mem", accentMem, percentOf(agg.MemUsedKB, agg.MemTotalKB), barWidth, fmt.Sprintf("%s / %s", humanizeKB(agg.MemUsedKB), humanizeKB(agg.MemTotalKB))),
+		barLabeled("Disk", accentDisk, percentOf(agg.DiskUsedKB, agg.DiskTotalKB), barWidth, fmt.Sprintf("%s / %s", humanizeKB(agg.DiskUsedKB), humanizeKB(agg.DiskTotalKB))),
+		netLoadLineStyled(agg),
+	}
 
-	return b.String()
+	title := fmt.Sprintf("Cluster Overview · %d node%s consolidated", len(m.cluster.Nodes), plural(len(m.cluster.Nodes)))
+	return renderBox(title, colorBlue, width, lines) + "\n"
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func (m Model) renderClusterBody() string {
 	var b strings.Builder
+	width := m.effectiveWidth()
+	inner := width - 4
+	if inner < 1 {
+		inner = 1
+	}
 
-	b.WriteString(sectionTitleStyle.Render("Nodes"))
-	b.WriteString("\n")
 	cols := fitColumns([]column{
 		{title: "NAME", width: 16, flexWeight: 1},
 		{title: "ROLE", width: 8},
@@ -217,9 +225,9 @@ func (m Model) renderClusterBody() string {
 		{title: "CPU%", width: 6, right: true},
 		{title: "MEM%", width: 6, right: true},
 		{title: "CONTAINERS", width: 10, right: true},
-	}, m.width)
-	b.WriteString(renderHeader(cols))
-	b.WriteString("\n")
+	}, inner)
+
+	nodeLines := []string{renderHeader(cols)}
 	for _, n := range m.cluster.Nodes {
 		status := "up"
 		style := lipgloss.NewStyle()
@@ -235,9 +243,9 @@ func (m Model) renderClusterBody() string {
 			fmt.Sprintf("%.1f", percentOf(n.Host.MemUsedKB, n.Host.MemTotalKB)),
 			strconv.Itoa(len(n.Containers)),
 		})
-		b.WriteString(style.Render(row))
-		b.WriteString("\n")
+		nodeLines = append(nodeLines, style.Render(row))
 	}
+	b.WriteString(renderBox(fmt.Sprintf("Nodes (%d/%d online)", m.cluster.OnlineCount(), len(m.cluster.Nodes)), colorGreen, width, nodeLines))
 
 	svcs := m.cluster.ServiceAggregates()
 	if len(svcs) > 0 {
@@ -247,54 +255,57 @@ func (m Model) renderClusterBody() string {
 			}
 			return svcs[i].CPUPercent > svcs[j].CPUPercent
 		})
-		b.WriteString(sectionTitleStyle.Render("Services"))
-		b.WriteString("\n")
 		scols := fitColumns([]column{
 			{title: "NAME", width: 28, flexWeight: 1},
 			{title: "REPLICAS", width: 8, right: true},
 			{title: "NODES", width: 6, right: true},
 			{title: "CPU%", width: 8, right: true},
 			{title: "MEM", width: 10, right: true},
-		}, m.width)
-		b.WriteString(renderHeader(scols))
-		b.WriteString("\n")
+		}, inner)
+		svcLines := []string{renderHeader(scols)}
 		for _, s := range svcs {
-			b.WriteString(renderRow(scols, []string{
+			svcLines = append(svcLines, renderRow(scols, []string{
 				s.Name,
 				strconv.Itoa(s.Replicas),
 				strconv.Itoa(len(s.Nodes)),
 				fmt.Sprintf("%.1f", s.CPUPercent),
 				humanizeBytes(s.MemUsageBytes),
 			}))
-			b.WriteString("\n")
 		}
+		b.WriteString("\n")
+		sortLabel := "cpu%"
+		if m.sortByMem {
+			sortLabel = "mem"
+		}
+		b.WriteString(renderBox(fmt.Sprintf("Services (%d) · sorted by %s", len(svcs), sortLabel), colorPurple, width, svcLines))
 	}
 
 	return b.String()
 }
 
 func (m Model) renderNodeHeader(n model.NodeSnapshot) string {
-	var b strings.Builder
-
-	title := fmt.Sprintf("%s  (%s)  role=%s", n.Name, n.Address, roleOr(n.Role))
-	b.WriteString(sectionTitleStyle.Render(title))
-	b.WriteString("\n")
+	width := m.effectiveWidth()
+	title := fmt.Sprintf("%s · %s · role=%s", n.Name, n.Address, roleOr(n.Role))
 
 	if !n.Online {
-		b.WriteString(errStyle.Render("node unreachable"))
+		msg := "node unreachable"
 		if n.Err != "" {
-			b.WriteString(": " + n.Err)
+			msg += ": " + n.Err
 		}
-		b.WriteString("\n")
-		return b.String()
+		return renderBox(title, colorRed, width, []string{errStyle.Render(msg)}) + "\n"
 	}
 
-	b.WriteString(headerStyle.Render(fmt.Sprintf("uptime %s   last update %s", humanizeUptime(n.Host.Uptime), n.UpdatedAt.Format("15:04:05"))))
-	b.WriteString("\n")
+	inner := width - 4
+	if inner < 1 {
+		inner = 1
+	}
 
-	barWidth := clampBarWidth(m.width, 3, 20, 24, 8, 30)
+	var lines []string
+	lines = append(lines, headerStyle.Render(fmt.Sprintf("uptime %s   last update %s", humanizeUptime(n.Host.Uptime), n.UpdatedAt.Format("15:04:05"))))
 
-	perRow := coresPerRow(m.effectiveWidth(), barWidth)
+	barWidth := clampBarWidth(width, 3, 20, 24, 8, 30)
+
+	perRow := coresPerRow(inner, barWidth)
 	for i := 0; i < len(n.Host.PerCoreCPU); i += perRow {
 		end := i + perRow
 		if end > len(n.Host.PerCoreCPU) {
@@ -304,32 +315,28 @@ func (m Model) renderNodeHeader(n model.NodeSnapshot) string {
 		for j := i; j < end; j++ {
 			cells = append(cells, bar(fmt.Sprintf("Core%d", j), n.Host.PerCoreCPU[j], barWidth, ""))
 		}
-		b.WriteString(strings.Join(cells, "  "))
-		b.WriteString("\n")
+		lines = append(lines, strings.Join(cells, "  "))
 	}
 	if len(n.Host.PerCoreCPU) == 0 {
-		b.WriteString(bar("CPU", n.Host.CPUPercent, barWidth*2, ""))
-		b.WriteString("\n")
+		lines = append(lines, barLabeled("CPU", accentCPU, n.Host.CPUPercent, barWidth*2, ""))
 	}
 
-	b.WriteString(bar("Mem", percentOf(n.Host.MemUsedKB, n.Host.MemTotalKB), barWidth*2, fmt.Sprintf("%s / %s", humanizeKB(n.Host.MemUsedKB), humanizeKB(n.Host.MemTotalKB))))
-	b.WriteString("\n")
+	lines = append(lines, barLabeled("Mem", accentMem, percentOf(n.Host.MemUsedKB, n.Host.MemTotalKB), barWidth*2, fmt.Sprintf("%s / %s", humanizeKB(n.Host.MemUsedKB), humanizeKB(n.Host.MemTotalKB))))
 	if n.Host.SwapTotalKB > 0 {
-		b.WriteString(bar("Swap", percentOf(n.Host.SwapUsedKB, n.Host.SwapTotalKB), barWidth*2, fmt.Sprintf("%s / %s", humanizeKB(n.Host.SwapUsedKB), humanizeKB(n.Host.SwapTotalKB))))
-		b.WriteString("\n")
+		lines = append(lines, barLabeled("Swap", accentSwap, percentOf(n.Host.SwapUsedKB, n.Host.SwapTotalKB), barWidth*2, fmt.Sprintf("%s / %s", humanizeKB(n.Host.SwapUsedKB), humanizeKB(n.Host.SwapTotalKB))))
 	}
-	b.WriteString(bar("Disk", percentOf(n.Host.DiskUsedKB, n.Host.DiskTotalKB), barWidth*2, fmt.Sprintf("%s / %s", humanizeKB(n.Host.DiskUsedKB), humanizeKB(n.Host.DiskTotalKB))))
-	b.WriteString("\n")
-	b.WriteString(netLoadLine(n.Host))
+	lines = append(lines, barLabeled("Disk", accentDisk, percentOf(n.Host.DiskUsedKB, n.Host.DiskTotalKB), barWidth*2, fmt.Sprintf("%s / %s", humanizeKB(n.Host.DiskUsedKB), humanizeKB(n.Host.DiskTotalKB))))
+	lines = append(lines, netLoadLineStyled(n.Host))
 
-	return b.String()
+	return renderBox(title, colorBlue, width, lines) + "\n"
 }
 
 func (m Model) renderNodeBody(n model.NodeSnapshot) string {
-	var b strings.Builder
-
-	b.WriteString(sectionTitleStyle.Render(fmt.Sprintf("Containers (%d)", len(n.Containers))))
-	b.WriteString("\n")
+	width := m.effectiveWidth()
+	inner := width - 4
+	if inner < 1 {
+		inner = 1
+	}
 
 	containers := make([]model.Container, len(n.Containers))
 	copy(containers, n.Containers)
@@ -349,11 +356,11 @@ func (m Model) renderNodeBody(n model.NodeSnapshot) string {
 		{title: "BLOCK IO", width: 18, right: true},
 		{title: "PIDS", width: 5, right: true},
 		{title: "STATUS", width: 16, flexWeight: 2},
-	}, m.width)
-	b.WriteString(renderHeader(cols))
-	b.WriteString("\n")
+	}, inner)
+
+	lines := []string{renderHeader(cols)}
 	for _, c := range containers {
-		b.WriteString(renderRow(cols, []string{
+		lines = append(lines, renderRow(cols, []string{
 			c.Name,
 			c.ServiceName,
 			fmt.Sprintf("%.1f", c.CPUPercent),
@@ -363,10 +370,9 @@ func (m Model) renderNodeBody(n model.NodeSnapshot) string {
 			strconv.Itoa(c.PIDs),
 			c.Status,
 		}))
-		b.WriteString("\n")
 	}
 
-	return b.String()
+	return renderBox(fmt.Sprintf("Containers (%d)", len(n.Containers)), colorCyan, width, lines)
 }
 
 func roleOr(role string) string {
@@ -400,9 +406,14 @@ func clampBarWidth(screenWidth, divisor, offset, def, min, max int) int {
 	return w
 }
 
-func netLoadLine(h model.HostStats) string {
-	return fmt.Sprintf("%-8s ↓ %-12s ↑ %-12s  load %.2f / %.2f / %.2f\n",
-		"Net", humanizeRate(h.NetRxBytesPerSec), humanizeRate(h.NetTxBytesPerSec), h.Load1, h.Load5, h.Load15)
+// netLoadLineStyled renders the network throughput/load line used inside
+// the cluster and node overview panels, with directional colors.
+func netLoadLineStyled(h model.HostStats) string {
+	label := lipgloss.NewStyle().Bold(true).Foreground(accentNet).Render(fmt.Sprintf("%-5s", "Net"))
+	down := lipgloss.NewStyle().Foreground(colorGreen).Render(fmt.Sprintf("↓ %-12s", humanizeRate(h.NetRxBytesPerSec)))
+	up := lipgloss.NewStyle().Foreground(colorBlue).Render(fmt.Sprintf("↑ %-12s", humanizeRate(h.NetTxBytesPerSec)))
+	load := headerStyle.Render(fmt.Sprintf("load %.2f / %.2f / %.2f", h.Load1, h.Load5, h.Load15))
+	return fmt.Sprintf("%s %s %s  %s", label, down, up, load)
 }
 
 func coresPerRow(width, barWidth int) int {

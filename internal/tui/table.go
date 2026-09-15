@@ -6,6 +6,8 @@ import (
 
 const colGap = 2
 
+const minColWidth = 6
+
 type column struct {
 	title      string
 	width      int
@@ -28,15 +30,32 @@ func fitColumns(cols []column, totalWidth int) []column {
 	}
 
 	extra := totalWidth - baseline - (len(cols)-1)*colGap
-	if extra <= 0 {
-		return cols
-	}
-
 	out := make([]column, len(cols))
 	copy(out, cols)
-	for i, c := range out {
-		if c.flexWeight > 0 {
-			out[i].width = c.width + extra*c.flexWeight/totalWeight
+
+	switch {
+	case extra > 0:
+		for i, c := range out {
+			if c.flexWeight > 0 {
+				out[i].width = c.width + extra*c.flexWeight/totalWeight
+			}
+		}
+	case extra < 0:
+		// Too narrow even at baseline: shrink the flexible columns
+		// (proportionally to their weight) instead of silently
+		// overflowing the available width.
+		deficit := -extra
+		for i, c := range out {
+			if c.flexWeight == 0 || deficit == 0 {
+				continue
+			}
+			shrink := deficit * c.flexWeight / totalWeight
+			if maxShrink := c.width - minColWidth; shrink > maxShrink {
+				shrink = maxShrink
+			}
+			if shrink > 0 {
+				out[i].width = c.width - shrink
+			}
 		}
 	}
 	return out
