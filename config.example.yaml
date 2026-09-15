@@ -29,3 +29,14 @@ nodes:
     role: worker
     user: ubuntu          # per-node override of ssh.user
     port: 2222             # per-node override of ssh.port
+
+# Plain servers you just want resource stats for over SSH - no Docker
+# assumed, so swtop never runs `docker` on these. Same fields/overrides as
+# "nodes", minus "role". Names must be unique across nodes and servers.
+servers:
+  - name: nas
+    address: 10.0.0.20
+
+  - name: build-box
+    address: 10.0.0.21
+    user: ubuntu

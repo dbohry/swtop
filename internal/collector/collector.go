@@ -21,13 +21,17 @@ type Collector struct {
 }
 
 func New(cfg *config.Config) *Collector {
-	state := make(map[string]model.NodeSnapshot, len(cfg.Nodes))
-	for _, n := range cfg.Nodes {
+	nodes := make([]config.NodeConfig, 0, len(cfg.Nodes)+len(cfg.Servers))
+	nodes = append(nodes, cfg.Nodes...)
+	nodes = append(nodes, cfg.Servers...)
+
+	state := make(map[string]model.NodeSnapshot, len(nodes))
+	for _, n := range nodes {
 		state[n.Name] = model.NodeSnapshot{Name: n.Name, Address: n.Address, Role: n.Role}
 	}
 	return &Collector{
 		interval: cfg.PollInterval.AsDuration(),
-		nodes:    cfg.Nodes,
+		nodes:    nodes,
 		state:    state,
 		out:      make(chan model.ClusterSnapshot, 1),
 	}
@@ -74,7 +78,11 @@ func (c *Collector) pollNode(n config.NodeConfig, stop <-chan struct{}) {
 }
 
 func (c *Collector) runOnce(n config.NodeConfig, client *sshx.Client, prev **probe.Sample) {
-	output, err := client.Run(probe.Script)
+	script := probe.HostScript
+	if n.Docker {
+		script = probe.Script
+	}
+	output, err := client.Run(script)
 	if err != nil {
 		c.mu.Lock()
 		c.state[n.Name] = model.NodeSnapshot{
