@@ -2,6 +2,7 @@
 
 [![Latest Release](https://img.shields.io/github/v/release/dbohry/swtop)](https://github.com/dbohry/swtop/releases/latest)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/dbohry/swtop)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A `btop`/`htop`-style terminal UI for a Docker Swarm cluster. Connects to every node over SSH and shows a consolidated cluster view plus a per-node view (CPU, memory, disk, network, and containers).
 
@@ -80,3 +81,7 @@ Plain servers with no Docker at all are welcome too — list them under `servers
 | `↑`/`↓`, `pgup`/`pgdn` | Scroll |
 | `s` | Sort by CPU% or memory |
 | `q` / `ctrl+c` | Quit |
+
+## License
+
+MIT — see [LICENSE](LICENSE).
