@@ -12,4 +12,5 @@ if [ ! -x "$BIN" ]; then
   (cd "$ROOT_DIR" && go build -o swtop ./cmd/swtop)
 fi
 
+cd "$ROOT_DIR"
 exec "$BIN" "$@"
