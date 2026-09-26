@@ -8,6 +8,8 @@ A `btop`/`htop`-style terminal UI for a Docker Swarm cluster. Connects to every 
 
 Plain servers with no Docker at all are welcome too — list them under `servers` and swtop shows host resources plus a top-processes list for them (sorted by CPU%, like `htop`) instead of a containers panel, and no `docker` calls are ever made.
 
+The **Cluster** view consolidates only the swarm `nodes`. When plain `servers` are configured as well, an **All** view consolidates every host, swarm nodes and servers together.
+
 <img width="1258" height="657" alt="Screenshot 2026-09-15 at 15 46 10" src="https://github.com/user-attachments/assets/75fb82d9-9e58-4304-beb2-aadbf708650e" />
 <img width="1261" height="656" alt="Screenshot 2026-09-15 at 15 46 25" src="https://github.com/user-attachments/assets/38f73264-19b6-4ffe-bb15-7d0ad4806aa7" />
 
@@ -77,7 +79,8 @@ Plain servers with no Docker at all are welcome too — list them under `servers
 |---|---|
 | `tab` / `→` / `l` | Next view |
 | `shift+tab` / `←` / `h` | Previous view |
-| `0`-`9` | Jump to Cluster (`0`) or node N |
+| `0`-`9` | Jump to the first overview (`0`) or host N |
+| `c` / `a` | Jump to the Cluster / All overview |
 | `↑`/`↓`, `pgup`/`pgdn` | Scroll |
 | `s` | Sort by CPU% or memory |
 | `q` / `ctrl+c` | Quit |
