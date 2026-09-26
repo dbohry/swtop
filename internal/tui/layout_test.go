@@ -138,3 +138,63 @@ func TestLayoutFitsTerminal(t *testing.T) {
 		}
 	}
 }
+
+func mixedSnapshot() model.ClusterSnapshot {
+	snap := layoutTestSnapshot(4, 2)
+	servers := layoutTestServerSnapshot(4, 3)
+	servers.Nodes[0].Name = "web-01"
+	snap.Nodes = append(snap.Nodes, servers.Nodes[0])
+	return snap
+}
+
+func TestClusterViewExcludesServers(t *testing.T) {
+	tm := tea.Model(New(nil))
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 120, Height: 60})
+	tm, _ = tm.Update(snapshotMsg(mixedSnapshot()))
+	m := tm.(Model)
+
+	if got := m.overviews(); len(got) != 2 || got[0] != overviewCluster || got[1] != overviewAll {
+		t.Fatalf("overviews = %v, want [Cluster All]", got)
+	}
+
+	cluster := m.View()
+	if !strings.Contains(cluster, "3 nodes consolidated") || !strings.Contains(cluster, "Nodes (3/3 online)") {
+		t.Errorf("cluster view should consolidate only the 3 swarm nodes, got:\n%s", cluster)
+	}
+	if strings.Contains(cluster, "│ web-01") {
+		t.Errorf("cluster view should not list plain servers, got:\n%s", cluster)
+	}
+
+	tm, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	all := tm.(Model).View()
+	if !strings.Contains(all, "4 hosts consolidated") || !strings.Contains(all, "Hosts (4/4 online)") {
+		t.Errorf("all view should consolidate every host, got:\n%s", all)
+	}
+	if !strings.Contains(all, "│ web-01") {
+		t.Errorf("all view should list plain servers, got:\n%s", all)
+	}
+
+	tm, _ = tm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("4")})
+	if node := tm.(Model).View(); !strings.Contains(node, "Processes (3)") {
+		t.Errorf("key 4 should jump to the 4th host (web-01), got:\n%s", node)
+	}
+
+	tm, _ = tm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if tm.(Model).activeTab != 0 {
+		t.Errorf("key c should jump to the Cluster tab, activeTab = %d", tm.(Model).activeTab)
+	}
+}
+
+func TestOverviewsForSingleKindSetups(t *testing.T) {
+	swarm := tea.Model(New(nil))
+	swarm, _ = swarm.Update(snapshotMsg(layoutTestSnapshot(4, 2)))
+	if got := swarm.(Model).overviews(); len(got) != 1 || got[0] != overviewCluster {
+		t.Errorf("swarm-only overviews = %v, want [Cluster]", got)
+	}
+
+	servers := tea.Model(New(nil))
+	servers, _ = servers.Update(snapshotMsg(layoutTestServerSnapshot(4, 2)))
+	if got := servers.(Model).overviews(); len(got) != 1 || got[0] != overviewAll {
+		t.Errorf("servers-only overviews = %v, want [All]", got)
+	}
+}

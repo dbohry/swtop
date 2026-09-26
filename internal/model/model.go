@@ -166,3 +166,24 @@ func (c ClusterSnapshot) ServiceAggregates() []ServiceAggregate {
 	}
 	return out
 }
+
+// SwarmNodes returns a snapshot containing only the Docker Swarm nodes,
+// leaving out plain servers.
+func (c ClusterSnapshot) SwarmNodes() ClusterSnapshot {
+	out := ClusterSnapshot{UpdatedAt: c.UpdatedAt}
+	for _, node := range c.Nodes {
+		if node.Docker {
+			out.Nodes = append(out.Nodes, node)
+		}
+	}
+	return out
+}
+
+func (c ClusterSnapshot) HasServers() bool {
+	for _, node := range c.Nodes {
+		if !node.Docker {
+			return true
+		}
+	}
+	return false
+}

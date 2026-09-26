@@ -19,6 +19,17 @@ const minViewportHeight = 3
 
 type snapshotMsg model.ClusterSnapshot
 
+// overview is one of the consolidated tabs shown before the per-host tabs.
+type overview int
+
+const (
+	// overviewCluster consolidates only the Docker Swarm nodes.
+	overviewCluster overview = iota
+	// overviewAll consolidates every configured host, swarm nodes and plain
+	// servers alike.
+	overviewAll
+)
+
 type Model struct {
 	snapshots <-chan model.ClusterSnapshot
 	cluster   model.ClusterSnapshot
@@ -58,7 +69,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case snapshotMsg:
 		m.cluster = model.ClusterSnapshot(msg)
-		if m.activeTab > len(m.cluster.Nodes) {
+		if m.activeTab >= m.numTabs() {
 			m.activeTab = 0
 		}
 		cmd = waitForSnapshot(m.snapshots)
@@ -68,16 +79,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "tab", "right", "l":
-			m.activeTab = (m.activeTab + 1) % (len(m.cluster.Nodes) + 1)
+			m.activeTab = (m.activeTab + 1) % m.numTabs()
 			m.viewport.GotoTop()
 		case "shift+tab", "left", "h":
-			m.activeTab = (m.activeTab - 1 + len(m.cluster.Nodes) + 1) % (len(m.cluster.Nodes) + 1)
+			m.activeTab = (m.activeTab - 1 + m.numTabs()) % m.numTabs()
 			m.viewport.GotoTop()
 		case "s":
 			m.sortByMem = !m.sortByMem
+		case "c", "a":
+			want := overviewCluster
+			if msg.String() == "a" {
+				want = overviewAll
+			}
+			for i, ov := range m.overviews() {
+				if ov == want {
+					m.activeTab = i
+					m.viewport.GotoTop()
+				}
+			}
 		default:
 			if n, err := strconv.Atoi(msg.String()); err == nil && n >= 0 && n <= len(m.cluster.Nodes) {
-				m.activeTab = n
+				m.activeTab = 0
+				if n > 0 {
+					m.activeTab = len(m.overviews()) + n - 1
+				}
 				m.viewport.GotoTop()
 			} else {
 				m.viewport, cmd = m.viewport.Update(msg)
@@ -87,6 +112,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	m.syncViewport()
 	return m, cmd
+}
+
+// overviews returns the consolidated tabs to show. The Cluster tab only
+// appears when swarm nodes are configured, and the All tab only when plain
+// servers are configured (with swarm nodes alone it would duplicate Cluster).
+func (m Model) overviews() []overview {
+	if len(m.cluster.Nodes) == 0 {
+		return []overview{overviewCluster}
+	}
+	hasSwarm := len(m.cluster.SwarmNodes().Nodes) > 0
+	var out []overview
+	if hasSwarm {
+		out = append(out, overviewCluster)
+	}
+	if m.cluster.HasServers() {
+		out = append(out, overviewAll)
+	}
+	return out
+}
+
+func (m Model) numTabs() int {
+	return len(m.overviews()) + len(m.cluster.Nodes)
+}
+
+func (m Model) overviewSnapshot(ov overview) model.ClusterSnapshot {
+	if ov == overviewCluster {
+		return m.cluster.SwarmNodes()
+	}
+	return m.cluster
+}
+
+// hostNoun is what the configured machines are called in the UI: "node" for
+// a pure swarm setup, "host" once plain servers are in the mix.
+func (m Model) hostNoun() string {
+	if m.cluster.HasServers() {
+		return "host"
+	}
+	return "node"
 }
 
 func (m *Model) syncViewport() {
@@ -122,10 +185,12 @@ func (m Model) layout() (header, body string, footerLines int) {
 	width := m.effectiveWidth()
 
 	header = m.renderTabs() + "\n"
-	if m.activeTab == 0 {
-		header += m.renderClusterHeader()
-		body = m.renderClusterBody()
-	} else if idx := m.activeTab - 1; idx < len(m.cluster.Nodes) {
+	overviews := m.overviews()
+	if m.activeTab < len(overviews) {
+		ov := overviews[m.activeTab]
+		header += m.renderOverviewHeader(ov)
+		body = m.renderOverviewBody(ov)
+	} else if idx := m.activeTab - len(overviews); idx < len(m.cluster.Nodes) {
 		node := m.cluster.Nodes[idx]
 		header += m.renderNodeHeader(node)
 		if node.Online {
@@ -155,51 +220,65 @@ func (m Model) renderFooter() string {
 	if m.sortByMem {
 		sortLabel = "mem"
 	}
+	jump := "0: overview"
+	if len(m.overviews()) > 1 {
+		jump = "c/a: cluster/all"
+	}
 	text := fmt.Sprintf(
-		"tab/←→: switch view   1-%d: jump to node   ↑↓/pgup/pgdn: scroll   s: sort by %s   q: quit   updated %s",
-		len(m.cluster.Nodes), sortLabel, m.cluster.UpdatedAt.Format("15:04:05"),
+		"tab/←→: switch view   %s   1-%d: jump to %s   ↑↓/pgup/pgdn: scroll   s: sort by %s   q: quit   updated %s",
+		jump, len(m.cluster.Nodes), m.hostNoun(), sortLabel, m.cluster.UpdatedAt.Format("15:04:05"),
 	)
 	return footerStyle.Render(clampLines(text, m.effectiveWidth()))
 }
 
 func (m Model) renderTabs() string {
 	var parts []string
-	label := "Cluster"
-	if m.activeTab == 0 {
-		parts = append(parts, tabActiveStyle.Render(label))
-	} else {
-		parts = append(parts, tabStyle.Render(label))
+	overviews := m.overviews()
+	for i, ov := range overviews {
+		label := "Cluster"
+		if ov == overviewAll {
+			label = "All"
+		}
+		if m.activeTab == i {
+			parts = append(parts, tabActiveStyle.Render(label))
+		} else {
+			parts = append(parts, tabStyle.Render(label))
+		}
 	}
 	for i, n := range m.cluster.Nodes {
 		label := n.Name
 		if !n.Online {
 			label += " ✗"
 		}
-		if m.activeTab == i+1 {
+		if m.activeTab == len(overviews)+i {
 			parts = append(parts, tabActiveStyle.Render(label))
 		} else {
 			parts = append(parts, tabStyle.Render(label))
 		}
 	}
 	title := titleStyle.Render("swtop")
-	sub := headerStyle.Render(fmt.Sprintf("  %d/%d nodes online", m.cluster.OnlineCount(), len(m.cluster.Nodes)))
+	sub := headerStyle.Render(fmt.Sprintf("  %d/%d %ss online", m.cluster.OnlineCount(), len(m.cluster.Nodes), m.hostNoun()))
 	return title + sub + "\n" + strings.Join(parts, " ")
 }
 
-func (m Model) renderClusterHeader() string {
-	agg := m.cluster.Aggregate()
+func (m Model) renderOverviewHeader(ov overview) string {
+	snap := m.overviewSnapshot(ov)
+	agg := snap.Aggregate()
 	width := m.effectiveWidth()
 
 	barWidth := clampBarWidth(width, 2, 20, 30, 10, 40)
 
 	lines := []string{
-		barLabeled("CPU", accentCPU, agg.CPUPercent, barWidth, fmt.Sprintf("%d cores", totalCores(m.cluster))),
+		barLabeled("CPU", accentCPU, agg.CPUPercent, barWidth, fmt.Sprintf("%d cores", totalCores(snap))),
 		barLabeled("Mem", accentMem, percentOf(agg.MemUsedKB, agg.MemTotalKB), barWidth, fmt.Sprintf("%s / %s", humanizeKB(agg.MemUsedKB), humanizeKB(agg.MemTotalKB))),
 		barLabeled("Disk", accentDisk, percentOf(agg.DiskUsedKB, agg.DiskTotalKB), barWidth, fmt.Sprintf("%s / %s", humanizeKB(agg.DiskUsedKB), humanizeKB(agg.DiskTotalKB))),
 		netLoadLineStyled(agg),
 	}
 
-	title := fmt.Sprintf("Cluster Overview · %d node%s consolidated", len(m.cluster.Nodes), plural(len(m.cluster.Nodes)))
+	title := fmt.Sprintf("Cluster Overview · %d node%s consolidated", len(snap.Nodes), plural(len(snap.Nodes)))
+	if ov == overviewAll {
+		title = fmt.Sprintf("All Hosts · %d host%s consolidated", len(snap.Nodes), plural(len(snap.Nodes)))
+	}
 	return renderBox(title, colorBlue, width, lines) + "\n"
 }
 
@@ -210,7 +289,8 @@ func plural(n int) string {
 	return "s"
 }
 
-func (m Model) renderClusterBody() string {
+func (m Model) renderOverviewBody(ov overview) string {
+	snap := m.overviewSnapshot(ov)
 	var b strings.Builder
 	width := m.effectiveWidth()
 	inner := width - 4
@@ -228,7 +308,7 @@ func (m Model) renderClusterBody() string {
 	}, inner)
 
 	nodeLines := []string{renderHeader(cols)}
-	for _, n := range m.cluster.Nodes {
+	for _, n := range snap.Nodes {
 		status := "up"
 		style := lipgloss.NewStyle()
 		if !n.Online {
@@ -249,9 +329,13 @@ func (m Model) renderClusterBody() string {
 		})
 		nodeLines = append(nodeLines, style.Render(row))
 	}
-	b.WriteString(renderBox(fmt.Sprintf("Nodes (%d/%d online)", m.cluster.OnlineCount(), len(m.cluster.Nodes)), colorGreen, width, nodeLines))
+	boxTitle := "Nodes"
+	if ov == overviewAll {
+		boxTitle = "Hosts"
+	}
+	b.WriteString(renderBox(fmt.Sprintf("%s (%d/%d online)", boxTitle, snap.OnlineCount(), len(snap.Nodes)), colorGreen, width, nodeLines))
 
-	svcs := m.cluster.ServiceAggregates()
+	svcs := snap.ServiceAggregates()
 	if len(svcs) > 0 {
 		sort.Slice(svcs, func(i, j int) bool {
 			if m.sortByMem {
